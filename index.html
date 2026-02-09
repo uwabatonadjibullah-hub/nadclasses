@@ -156,7 +156,6 @@
         window.handlePayment = async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
-            const payerName = formData.get('payerName');
             const txid = parseInt(formData.get('txid'));
 
             // Internal logic validation
@@ -198,7 +197,6 @@
             render();
         };
 
-        // Syllabus Builder Helpers
         window.addChapter = () => { state.formChapters.push({ title: '', lectures: [{ title: '', link: '' }] }); render(); };
         window.removeChapter = (idx) => { state.formChapters.splice(idx, 1); render(); };
         window.addLecture = (chapIdx) => { state.formChapters[chapIdx].lectures.push({ title: '', link: '' }); render(); };
@@ -233,8 +231,6 @@
             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'courses', id), { status: newStatus });
         };
 
-        window.askDelete = (id) => { state.showDeleteConfirm = id; render(); };
-        window.cancelDelete = () => { state.showDeleteConfirm = null; render(); };
         window.confirmDelete = async () => {
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'courses', state.showDeleteConfirm));
             state.showDeleteConfirm = null;
@@ -780,10 +776,10 @@
                             <p class="text-slate-300 font-bold text-[10px] mt-1">© NAD PRODUCTION 2026</p>
                         </div>
                         <div class="flex items-center gap-6">
-                            <a href="#" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="instagram" class="w-5 h-5"></i></a>
+                            <a href="https://www.instagram.com/iamnad_/" target="_blank" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="instagram" class="w-5 h-5"></i></a>
                             <a href="https://wa.me/250786487234" target="_blank" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="message-circle" class="w-5 h-5"></i></a>
                             <a href="mailto:nadjibullahu@gmail.com" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="mail" class="w-5 h-5"></i></a>
-                            <a href="#" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="youtube" class="w-5 h-5"></i></a>
+                            <a href="https://www.youtube.com/@iamnadofficial" target="_blank" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="youtube" class="w-5 h-5"></i></a>
                         </div>
                     </div>
                 </footer>
