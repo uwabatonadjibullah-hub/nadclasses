@@ -11,13 +11,23 @@
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Configuration
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { 
-            apiKey: "", 
+        /** * UPDATED FIREBASE CONFIGURATION
+         * Your specific keys have been integrated below.
+         */
+        const firebaseConfig = { 
+            apiKey: "AIzaSyAgzwrI7LHptStmqnEuqB6LM72m9w3WMWs",
+            authDomain: "nadclasses.firebaseapp.com",
             projectId: "nadclasses",
-            authDomain: "nadclasses.firebaseapp.com"
+            storageBucket: "nadclasses.firebasestorage.app",
+            messagingSenderId: "79531197579",
+            appId: "1:79531197579:web:6671e03b4b569fa461c08e",
+            measurementId: "G-CCTB8LHD1Q"
         };
-        const app = initializeApp(firebaseConfig);
+
+        // Environment override (The platform provides keys at runtime in the preview)
+        const actualConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfig;
+        
+        const app = initializeApp(actualConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'nad-class-app';
@@ -45,7 +55,9 @@
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
-                    await signInAnonymously(auth);
+                    // Start anonymously to allow data reading before login if needed, 
+                    // but onAuthStateChanged will handle the view switch.
+                    if (!auth.currentUser) await signInAnonymously(auth);
                 }
             } catch (err) {
                 console.error("Auth Init Error:", err);
@@ -58,7 +70,7 @@
                 state.user = user;
                 state.isAdmin = user.email === ADMIN_EMAIL;
                 
-                // Corrected Path: artifacts/{appId}/users/{userId}/profile/details (6 segments)
+                // Fetch profile: artifacts/{appId}/users/{userId}/profile/details (6 segments)
                 const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'details');
                 const profileSnap = await getDoc(profileRef);
                 
@@ -81,14 +93,14 @@
         function initDataListeners() {
             if (!state.user) return;
 
-            // Corrected Path: artifacts/{appId}/public/data/courses (6 segments for collection)
+            // Courses: artifacts/{appId}/public/data/courses (6 segments for collection)
             const coursesRef = collection(db, 'artifacts', appId, 'public', 'data', 'courses');
             onSnapshot(coursesRef, (snap) => {
                 state.courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                 render();
             }, (err) => console.error("Courses Error:", err));
 
-            // Corrected Path: artifacts/{appId}/public/data/timetable/main (6 segments for document)
+            // Timetable: artifacts/{appId}/public/data/timetable/main (6 segments for document)
             const timetableRef = doc(db, 'artifacts', appId, 'public', 'data', 'timetable', 'main');
             onSnapshot(timetableRef, (snap) => {
                 if (snap.exists()) {
@@ -113,7 +125,6 @@
                     const name = e.target.fullname.value;
                     const gender = e.target.gender.value;
                     const cred = await createUserWithEmailAndPassword(auth, email, password);
-                    // Corrected Path: artifacts/{appId}/users/{userId}/profile/details (6 segments)
                     await setDoc(doc(db, 'artifacts', appId, 'users', cred.user.uid, 'profile', 'details'), {
                         name, email, gender, role: 'student'
                     });
@@ -131,7 +142,10 @@
         window.toggleSidebar = () => { state.sidebarOpen = !state.sidebarOpen; render(); };
         window.logout = async () => {
             await signOut(auth);
-            await signInAnonymously(auth);
+            state.user = null;
+            state.profile = null;
+            state.view = 'auth';
+            render();
         };
 
         window.saveCourse = async (e) => {
@@ -149,11 +163,11 @@
                 status: state.editingCourse?.status || 'published'
             };
 
-            const coursesCol = collection(db, 'artifacts', appId, 'public', 'data', 'courses');
             if (state.editingCourse) {
                 const courseRef = doc(db, 'artifacts', appId, 'public', 'data', 'courses', state.editingCourse.id);
                 await updateDoc(courseRef, data);
             } else {
+                const coursesCol = collection(db, 'artifacts', appId, 'public', 'data', 'courses');
                 await addDoc(coursesCol, data);
             }
             navigate('admin-courses');
@@ -592,7 +606,7 @@
                         <i data-lucide="arrow-left" class="w-4 h-4"></i> Cancel
                     </button>
                     <h2 class="text-4xl font-black text-[#1e3a8a] mb-10">${isEdit ? 'Edit Course Details' : 'Design New Course'}</h2>
-                    <form onsubmit="saveCourse(event)" class="bg-white border-2 border-slate-50 rounded-[50px] p-12 shadow-2xl space-y-10">
+                    <form onsubmit="saveCourse(event)" class="bg-white border-2 border-slate-100 rounded-[50px] p-12 shadow-2xl space-y-10">
                         <div class="grid md:grid-cols-2 gap-10">
                             <div class="space-y-6">
                                 <h3 class="text-xs font-black uppercase tracking-[3px] text-slate-400 mb-6">Marketing Data</h3>
