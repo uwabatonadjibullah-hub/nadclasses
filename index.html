@@ -37,16 +37,16 @@
             timetable: {},
             timetableWeek: 1,
             activeCourse: null,
-            pendingCourse: null, // Course selected for payment
+            pendingCourse: null, 
             isAdmin: false,
             editingCourse: null,
             formChapters: [{ title: '', lectures: [{ title: '', link: '' }] }],
             showDeleteConfirm: null,
-            message: null // For UI notifications
+            message: null 
         };
 
         const ADMIN_EMAIL = "nadjibullahu@gmail.com";
-        const MIN_ = 25974893559;
+        const MIN_TXID = 25974893559;
 
         // Auth Logic
         async function initAuth() {
@@ -157,10 +157,11 @@
             e.preventDefault();
             const formData = new FormData(e.target);
             const payerName = formData.get('payerName');
-            const  = parseInt(formData.get(''));
+            const txid = parseInt(formData.get('txid'));
 
+            // Internal logic validation
             if (!txid || txid <= MIN_TXID) {
-                showMessage(`Verification failed. Transaction ID must be greater than ${MIN_TXID}.`, "error");
+                showMessage(`Verification failed. Please ensure your Transaction ID is correct and valid.`, "error");
                 return;
             }
 
@@ -232,6 +233,8 @@
             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'courses', id), { status: newStatus });
         };
 
+        window.askDelete = (id) => { state.showDeleteConfirm = id; render(); };
+        window.cancelDelete = () => { state.showDeleteConfirm = null; render(); };
         window.confirmDelete = async () => {
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'courses', state.showDeleteConfirm));
             state.showDeleteConfirm = null;
@@ -479,8 +482,8 @@
                             </div>
                             <div class="space-y-2">
                                 <label class="block text-xs font-black text-slate-400 uppercase ml-2">Transaction ID (TxID)</label>
-                                <input name="txid" type="number" required placeholder="From the MOMO message" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
-                                <p class="text-[10px] text-slate-400 italic px-2">Verification is instant. TxID must be correct, for Example ${MIN_TXID}.</p>
+                                <input name="txid" type="number" required placeholder="Example: 25974893559" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
+                                <p class="text-[10px] text-slate-400 italic px-2">Verification is processed based on your MOMO notification details.</p>
                             </div>
                             <div class="flex gap-4 pt-4">
                                 <button type="button" onclick="navigate('courses')" class="flex-1 py-5 bg-slate-100 text-slate-500 rounded-3xl font-black hover:bg-slate-200 transition">Cancel</button>
