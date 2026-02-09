@@ -46,7 +46,7 @@
         };
 
         const ADMIN_EMAIL = "nadjibullahu@gmail.com";
-        const MIN_TXID = 25974893559;
+        const MIN_ = 25974893559;
 
         // Auth Logic
         async function initAuth() {
@@ -157,7 +157,7 @@
             e.preventDefault();
             const formData = new FormData(e.target);
             const payerName = formData.get('payerName');
-            const txid = parseInt(formData.get('txid'));
+            const  = parseInt(formData.get(''));
 
             if (!txid || txid <= MIN_TXID) {
                 showMessage(`Verification failed. Transaction ID must be greater than ${MIN_TXID}.`, "error");
@@ -480,7 +480,7 @@
                             <div class="space-y-2">
                                 <label class="block text-xs font-black text-slate-400 uppercase ml-2">Transaction ID (TxID)</label>
                                 <input name="txid" type="number" required placeholder="From the MOMO message" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
-                                <p class="text-[10px] text-slate-400 italic px-2">Verification is instant. TxID must be greater than ${MIN_TXID}.</p>
+                                <p class="text-[10px] text-slate-400 italic px-2">Verification is instant. TxID must be correct, for Example ${MIN_TXID}.</p>
                             </div>
                             <div class="flex gap-4 pt-4">
                                 <button type="button" onclick="navigate('courses')" class="flex-1 py-5 bg-slate-100 text-slate-500 rounded-3xl font-black hover:bg-slate-200 transition">Cancel</button>
