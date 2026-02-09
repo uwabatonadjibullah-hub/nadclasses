@@ -73,6 +73,7 @@
                     const profileSnap = await getDoc(profileRef);
                     if (profileSnap.exists()) {
                         state.profile = profileSnap.data();
+                        if (!state.profile.enrolled) state.profile.enrolled = [];
                     } else if (state.isAdmin) {
                         state.profile = { name: "Nadjibullah UWABATO", gender: "M", email: ADMIN_EMAIL, enrolled: [] };
                     } else {
@@ -80,6 +81,7 @@
                     }
                 } catch (e) {
                     console.error("Profile Fetch Error:", e);
+                    state.profile = { name: "Learner", enrolled: [] };
                 }
                 
                 state.view = 'home';
@@ -156,20 +158,41 @@
         window.handlePayment = async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
-            const txid = parseInt(formData.get('txid'));
+            const payerName = formData.get('payerName');
+            const txidStr = formData.get('txid');
+            const txid = parseInt(txidStr);
 
-            // Internal logic validation
+            // Logic applies only to TxID value
             if (!txid || txid <= MIN_TXID) {
                 showMessage(`Verification failed. Please ensure your Transaction ID is correct and valid.`, "error");
                 return;
             }
 
             try {
+                // 1. Store payment details in the new 'payments' collection
+                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'payments'), {
+                    userId: state.user.uid,
+                    userEmail: state.user.email,
+                    payerName: payerName,
+                    txid: txidStr,
+                    courseId: state.pendingCourse.id,
+                    courseTitle: state.pendingCourse.title,
+                    amount: state.pendingCourse.price,
+                    timestamp: new Date().toISOString()
+                });
+
+                // 2. Unlock the course for the user
+                if (!state.profile) {
+                    state.profile = { enrolled: [] };
+                }
+                
                 const enrolled = state.profile.enrolled || [];
-                enrolled.push(state.pendingCourse.id);
+                if (!enrolled.includes(state.pendingCourse.id)) {
+                    enrolled.push(state.pendingCourse.id);
+                }
                 
                 const profileRef = doc(db, 'artifacts', appId, 'users', state.user.uid, 'profile', 'details');
-                await updateDoc(profileRef, { enrolled: enrolled });
+                await setDoc(profileRef, { ...state.profile, enrolled: enrolled }, { merge: true });
                 
                 state.profile.enrolled = enrolled;
                 state.activeCourse = state.pendingCourse;
@@ -231,6 +254,8 @@
             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'courses', id), { status: newStatus });
         };
 
+        window.askDelete = (id) => { state.showDeleteConfirm = id; render(); };
+        window.cancelDelete = () => { state.showDeleteConfirm = null; render(); };
         window.confirmDelete = async () => {
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'courses', state.showDeleteConfirm));
             state.showDeleteConfirm = null;
