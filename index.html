@@ -11,8 +11,10 @@
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        /** * UPDATED FIREBASE CONFIGURATION
-         * Your specific keys have been integrated below.
+        /** * FIREBASE CONFIGURATION
+         * 1. Go to Firebase Console > Authentication > Settings > Authorized Domains
+         * 2. Add 'nadclasses.netlify.app' to the list.
+         * 3. Go to Sign-in Method and enable 'Anonymous' and 'Email/Password'.
          */
         const firebaseConfig = { 
             apiKey: "AIzaSyAgzwrI7LHptStmqnEuqB6LM72m9w3WMWs",
@@ -24,9 +26,7 @@
             measurementId: "G-CCTB8LHD1Q"
         };
 
-        // Environment override (The platform provides keys at runtime in the preview)
         const actualConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfig;
-        
         const app = initializeApp(actualConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
@@ -40,7 +40,7 @@
             sidebarOpen: true,
             courses: [],
             timetable: {},
-            timetableWeek: 1, // 1 or 2
+            timetableWeek: 1,
             activeCourse: null,
             isAdmin: false,
             editingCourse: null,
@@ -49,35 +49,43 @@
 
         const ADMIN_EMAIL = "nadjibullahu@gmail.com";
 
-        // Initialization & Auth Listener
+        // Auth Logic
         async function initAuth() {
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    // Start anonymously to allow data reading before login if needed, 
-                    // but onAuthStateChanged will handle the view switch.
-                    if (!auth.currentUser) await signInAnonymously(auth);
+                } else if (!auth.currentUser) {
+                    // Attempt background auth. If Anonymous is disabled, this will catch.
+                    await signInAnonymously(auth);
                 }
             } catch (err) {
-                console.error("Auth Init Error:", err);
+                console.warn("Background Auth Note:", err.message);
+                if (err.code === 'auth/configuration-not-found') {
+                    console.info("Manual login required. (Enable 'Anonymous' in Firebase to allow guest state)");
+                }
+                // Force render auth view if everything fails
+                if (state.view === 'auth') render();
             }
         }
         initAuth();
 
         onAuthStateChanged(auth, async (user) => {
+            // Only proceed with data loading if we have a real user (not anonymous, or we treat admin specially)
             if (user && !user.isAnonymous) {
                 state.user = user;
                 state.isAdmin = user.email === ADMIN_EMAIL;
                 
                 // Fetch profile: artifacts/{appId}/users/{userId}/profile/details (6 segments)
                 const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'details');
-                const profileSnap = await getDoc(profileRef);
-                
-                if (profileSnap.exists()) {
-                    state.profile = profileSnap.data();
-                } else if (state.isAdmin) {
-                    state.profile = { name: "Nadjibullah UWABATO", gender: "M", email: ADMIN_EMAIL };
+                try {
+                    const profileSnap = await getDoc(profileRef);
+                    if (profileSnap.exists()) {
+                        state.profile = profileSnap.data();
+                    } else if (state.isAdmin) {
+                        state.profile = { name: "Nadjibullah UWABATO", gender: "M", email: ADMIN_EMAIL };
+                    }
+                } catch (e) {
+                    console.error("Profile Fetch Error:", e);
                 }
                 
                 state.view = 'home';
@@ -86,19 +94,19 @@
                 state.user = null;
                 state.profile = null;
                 state.view = 'auth';
+                render();
             }
-            render();
         });
 
         function initDataListeners() {
             if (!state.user) return;
 
-            // Courses: artifacts/{appId}/public/data/courses (6 segments for collection)
+            // Courses: artifacts/{appId}/public/data/courses (5 segments for collection query)
             const coursesRef = collection(db, 'artifacts', appId, 'public', 'data', 'courses');
             onSnapshot(coursesRef, (snap) => {
                 state.courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                 render();
-            }, (err) => console.error("Courses Error:", err));
+            }, (err) => console.error("Courses Listener Error:", err));
 
             // Timetable: artifacts/{appId}/public/data/timetable/main (6 segments for document)
             const timetableRef = doc(db, 'artifacts', appId, 'public', 'data', 'timetable', 'main');
@@ -107,7 +115,7 @@
                     state.timetable = snap.data();
                     render();
                 }
-            }, (err) => console.error("Timetable Error:", err));
+            }, (err) => console.error("Timetable Listener Error:", err));
         }
 
         // --- Logic Actions ---
@@ -129,7 +137,9 @@
                         name, email, gender, role: 'student'
                     });
                 }
-            } catch (err) { alert(err.message); }
+            } catch (err) { 
+                alert("Login/Signup Error: " + err.message); 
+            }
         };
 
         window.navigate = (view, payload = null) => {
@@ -142,6 +152,8 @@
         window.toggleSidebar = () => { state.sidebarOpen = !state.sidebarOpen; render(); };
         window.logout = async () => {
             await signOut(auth);
+            // After logout, try to go back to guest state or just auth view
+            try { await signInAnonymously(auth); } catch(e) {}
             state.user = null;
             state.profile = null;
             state.view = 'auth';
@@ -190,11 +202,12 @@
 
         window.updateSchedule = async (day, time, week) => {
             if (!state.isAdmin) return;
-            const existing = state.timetable[`w${week}_${day}_${time}`] || "";
+            const key = `w${week}_${day}_${time}`;
+            const existing = state.timetable[key] || "";
             const task = prompt(`Schedule for Week ${week}, ${day} at ${time}:`, existing);
             if (task !== null) {
                 const update = {};
-                update[`w${week}_${day}_${time}`] = task;
+                update[key] = task;
                 const timetableRef = doc(db, 'artifacts', appId, 'public', 'data', 'timetable', 'main');
                 await setDoc(timetableRef, update, { merge: true });
             }
@@ -212,6 +225,8 @@
 
         function render() {
             const root = document.getElementById('root');
+            if (!root) return;
+            
             if (state.view === 'auth') {
                 root.innerHTML = renderAuth();
             } else {
@@ -308,24 +323,24 @@
                 <aside class="bg-[#1e3a8a] text-white flex flex-col transition-all duration-300 ${state.sidebarOpen ? 'w-72' : 'w-24'}">
                     <div class="p-8 flex items-center gap-4">
                         <div class="bg-[#0ea5e9] p-2 rounded-xl shrink-0"><i data-lucide="clapperboard" class="w-6 h-6"></i></div>
-                        ${state.sidebarOpen ? '<span class="font-black text-xl tracking-tighter">NAD CLASS</span>' : ''}
+                        ${state.sidebarOpen ? '<span class="font-black text-xl tracking-tighter text-nowrap">NAD CLASS</span>' : ''}
                     </div>
                     <nav class="flex-1 px-4 space-y-2 mt-4">
                         ${menu.map(m => `
                             <button onclick="navigate('${m.id}')" class="w-full flex items-center gap-4 p-4 rounded-2xl transition-all ${state.view === m.id ? 'bg-[#0ea5e9] shadow-lg shadow-blue-900/50' : 'hover:bg-blue-800 text-blue-200'}">
-                                <i data-lucide="${m.icon}" class="w-6 h-6"></i>
-                                ${state.sidebarOpen ? `<span class="font-bold">${m.label}</span>` : ''}
+                                <i data-lucide="${m.icon}" class="w-6 h-6 shrink-0"></i>
+                                ${state.sidebarOpen ? `<span class="font-bold text-nowrap">${m.label}</span>` : ''}
                             </button>
                         `).join('')}
                     </nav>
                     <div class="p-4 border-t border-blue-800 space-y-2">
                         <button onclick="navigate('profile')" class="w-full flex items-center gap-4 p-4 rounded-2xl text-blue-200 hover:bg-blue-800 transition">
-                            <i data-lucide="user" class="w-6 h-6"></i>
-                            ${state.sidebarOpen ? '<span class="font-bold">Profile</span>' : ''}
+                            <i data-lucide="user" class="w-6 h-6 shrink-0"></i>
+                            ${state.sidebarOpen ? '<span class="font-bold text-nowrap">Profile</span>' : ''}
                         </button>
                         <button onclick="logout()" class="w-full flex items-center gap-4 p-4 rounded-2xl text-red-400 hover:bg-red-900/20 transition">
-                            <i data-lucide="log-out" class="w-6 h-6"></i>
-                            ${state.sidebarOpen ? '<span class="font-bold">Log out</span>' : ''}
+                            <i data-lucide="log-out" class="w-6 h-6 shrink-0"></i>
+                            ${state.sidebarOpen ? '<span class="font-bold text-nowrap">Log out</span>' : ''}
                         </button>
                     </div>
                 </aside>
@@ -338,9 +353,9 @@
                 <header class="bg-white/80 backdrop-blur-md sticky top-0 z-30 border-b h-20 flex items-center justify-between px-10">
                     <button onclick="toggleSidebar()" class="p-3 hover:bg-slate-100 rounded-2xl transition"><i data-lucide="menu"></i></button>
                     <div class="flex items-center gap-8">
-                        <div class="text-right">
+                        <div class="text-right hidden sm:block">
                             <p class="text-xs font-black text-slate-400 uppercase tracking-widest">Signed in as</p>
-                            <p class="font-bold text-[#1e3a8a]">${name}</p>
+                            <p class="font-bold text-[#1e3a8a] truncate max-w-[150px]">${name}</p>
                         </div>
                         <a href="https://booknadprod.web.app/" target="_blank" class="bg-[#1e3a8a] text-white px-6 py-3 rounded-2xl font-black text-sm hover:bg-[#0ea5e9] transition-all shadow-lg shadow-blue-100">BOOK NAD</a>
                     </div>
@@ -364,33 +379,33 @@
         }
 
         function renderHome() {
-            const name = state.profile?.name || "Student";
+            const name = state.profile?.name || (state.isAdmin ? "Nadjibullah" : "Learner");
             return `
                 <div class="max-w-5xl mx-auto space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                    <div class="bg-gradient-to-br from-[#1e3a8a] to-[#0ea5e9] p-16 rounded-[50px] text-white relative overflow-hidden shadow-2xl">
+                    <div class="bg-gradient-to-br from-[#1e3a8a] to-[#0ea5e9] p-8 md:p-16 rounded-[50px] text-white relative overflow-hidden shadow-2xl">
                         <div class="relative z-10">
-                            <h1 class="text-5xl md:text-6xl font-black mb-6">Welcome, ${name}!</h1>
-                            <p class="text-blue-100 text-xl max-w-lg leading-relaxed">Your creative journey continues here. Master Filmmaking and Graphic Design with precision.</p>
+                            <h1 class="text-4xl md:text-6xl font-black mb-6">Welcome, ${name}!</h1>
+                            <p class="text-blue-100 text-lg md:text-xl max-w-lg leading-relaxed">Your creative journey continues here. Master Filmmaking and Graphic Design with precision.</p>
                             <button onclick="navigate('courses')" class="mt-10 bg-white text-[#1e3a8a] px-10 py-4 rounded-3xl font-black text-lg hover:shadow-2xl transition transform hover:scale-105">View Your Courses</button>
                         </div>
                         <i data-lucide="sparkles" class="absolute -right-10 -bottom-10 w-80 h-80 text-white/10 rotate-12"></i>
                     </div>
                     
-                    <div class="grid md:grid-cols-3 gap-8">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-8">
                         <div class="bg-white p-8 rounded-[40px] border shadow-sm flex flex-col items-center text-center">
                             <div class="bg-blue-50 w-16 h-16 rounded-2xl flex items-center justify-center text-[#1e3a8a] mb-4"><i data-lucide="clock" class="w-8 h-8"></i></div>
-                            <h3 class="font-black text-2xl">12h</h3>
-                            <p class="text-slate-400 font-bold uppercase text-xs">Learning Time</p>
+                            <h3 class="font-black text-2xl">AI Course</h3>
+                            <p class="text-slate-400 font-bold uppercase text-xs">6000 RWF</p>
                         </div>
                         <div class="bg-white p-8 rounded-[40px] border shadow-sm flex flex-col items-center text-center">
                             <div class="bg-green-50 w-16 h-16 rounded-2xl flex items-center justify-center text-green-600 mb-4"><i data-lucide="check-circle" class="w-8 h-8"></i></div>
-                            <h3 class="font-black text-2xl">4</h3>
-                            <p class="text-slate-400 font-bold uppercase text-xs">Completed Lessons</p>
+                            <h3 class="font-black text-2xl">Grading</h3>
+                            <p class="text-slate-400 font-bold uppercase text-xs">9000 RWF</p>
                         </div>
                         <div class="bg-white p-8 rounded-[40px] border shadow-sm flex flex-col items-center text-center">
                             <div class="bg-amber-50 w-16 h-16 rounded-2xl flex items-center justify-center text-amber-600 mb-4"><i data-lucide="award" class="w-8 h-8"></i></div>
-                            <h3 class="font-black text-2xl">1</h3>
-                            <p class="text-slate-400 font-bold uppercase text-xs">Certificates</p>
+                            <h3 class="font-black text-2xl">New</h3>
+                            <p class="text-slate-400 font-bold uppercase text-xs">After Effects</p>
                         </div>
                     </div>
                 </div>
@@ -401,23 +416,23 @@
             const filtered = state.isAdmin ? state.courses : state.courses.filter(c => c.status !== 'frozen');
             return `
                 <div class="max-w-6xl mx-auto space-y-12">
-                    <div class="flex justify-between items-end">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
                         <div>
                             <h2 class="text-4xl font-black text-[#1e3a8a]">Academy Courses</h2>
                             <p class="text-slate-400 font-bold">Start your cinematic professional training today.</p>
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-10">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
                         ${filtered.map(c => `
                             <div class="bg-white border-2 border-slate-50 rounded-[40px] overflow-hidden shadow-sm hover:shadow-2xl transition-all group flex flex-col h-full">
-                                <div class="relative h-56 overflow-hidden">
+                                <div class="relative h-56 overflow-hidden bg-slate-100">
                                     <img src="${c.thumbnail || 'https://images.unsplash.com/photo-1492724441997-5dc865305da7?w=800'}" class="w-full h-full object-cover group-hover:scale-110 transition duration-700">
                                     <div class="absolute top-6 right-6 bg-white/95 backdrop-blur px-4 py-2 rounded-2xl font-black text-[#1e3a8a] shadow-lg">${c.price} RWF</div>
                                     ${c.status === 'frozen' ? `<div class="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px] flex items-center justify-center text-white font-black text-lg uppercase tracking-widest"><i data-lucide="eye-off" class="mr-2"></i> Frozen</div>` : ''}
                                 </div>
                                 <div class="p-8 flex flex-col flex-1">
-                                    <h3 class="text-2xl font-black mb-3 text-[#1e3a8a]">${c.title}</h3>
+                                    <h3 class="text-2xl font-black mb-3 text-[#1e3a8a] line-clamp-2">${c.title}</h3>
                                     <p class="text-slate-500 text-sm mb-8 line-clamp-3 leading-relaxed flex-1">${c.description}</p>
                                     <button onclick="navigate('course-player', ${JSON.stringify(c).replace(/"/g, '&quot;')})" class="w-full py-4 bg-[#1e3a8a] text-white rounded-2xl font-black hover:bg-[#0ea5e9] transition-all shadow-lg shadow-blue-100">Take Course</button>
                                 </div>
@@ -425,9 +440,9 @@
                         `).join('')}
                     </div>
 
-                    <div class="mt-20 p-12 bg-slate-900 rounded-[60px] text-white shadow-2xl">
+                    <div class="mt-20 p-8 md:p-12 bg-slate-900 rounded-[60px] text-white shadow-2xl">
                         <h3 class="text-3xl font-black mb-8 flex items-center gap-4"><i data-lucide="timer" class="text-[#0ea5e9]"></i> Upcoming Courses</h3>
-                        <div class="grid md:grid-cols-2 gap-8">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
                             <div class="bg-slate-800/50 border border-slate-700 p-8 rounded-[30px] flex items-center justify-between group">
                                 <div>
                                     <span class="text-[#0ea5e9] text-xs font-black uppercase tracking-widest mb-2 block">Release: Q2 2026</span>
@@ -443,6 +458,7 @@
 
         function renderCoursePlayer() {
             const c = state.activeCourse;
+            if (!c) return `<div>Course not found.</div>`;
             const isYT = c.videoLink?.includes('youtube.com') || c.videoLink?.includes('youtu.be');
             let ytId = '';
             if (isYT) {
@@ -451,7 +467,7 @@
 
             return `
                 <div class="max-w-6xl mx-auto space-y-10 animate-in fade-in duration-500">
-                    <button onclick="navigate('courses')" class="flex items-center gap-3 font-black text-slate-400 hover:text-[#1e3a8a] transition uppercase text-xs tracking-widest">
+                    <button onclick="navigate('courses')" class="flex items-center gap-3 font-black text-slate-400 hover:text-[#1e3a8a] transition uppercase text-[10px] tracking-widest">
                         <i data-lucide="arrow-left" class="w-4 h-4"></i> Back to Courses
                     </button>
                     
@@ -462,16 +478,16 @@
                                     `<iframe class="w-full h-full" src="https://www.youtube.com/embed/${ytId}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>` :
                                     `<div class="h-full flex flex-col items-center justify-center text-white p-10 text-center">
                                         <i data-lucide="video" class="w-16 h-16 mb-4 text-slate-700"></i>
-                                        <p class="mb-6 font-bold text-slate-400">Supporting media link detected</p>
+                                        <p class="mb-6 font-bold text-slate-400 uppercase text-xs tracking-widest">Supporting media link detected</p>
                                         <a href="${c.videoLink}" target="_blank" class="bg-[#0ea5e9] px-10 py-4 rounded-3xl font-black shadow-xl">Open External Media</a>
                                     </div>`
                                 }
                             </div>
                             <div>
                                 <h1 class="text-4xl font-black text-[#1e3a8a] mb-4">${c.title}</h1>
-                                <div class="flex gap-4 mb-6">
-                                    <span class="bg-blue-50 text-[#1e3a8a] px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider">${c.duration || 'N/A'}</span>
-                                    <span class="bg-slate-100 text-slate-500 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider">${c.chapterTitle || '1 Chapter'}</span>
+                                <div class="flex flex-wrap gap-4 mb-6">
+                                    <span class="bg-blue-50 text-[#1e3a8a] px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider">${c.duration || 'N/A'}</span>
+                                    <span class="bg-slate-100 text-slate-500 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider">${c.chapterTitle || 'Intro'}</span>
                                 </div>
                                 <p class="text-slate-500 text-lg leading-relaxed bg-white p-8 rounded-[30px] border border-slate-100">${c.description}</p>
                             </div>
@@ -479,18 +495,18 @@
                         
                         <div class="space-y-8">
                             <div class="bg-white border-2 border-slate-50 rounded-[40px] p-8 shadow-xl">
-                                <h3 class="font-black text-xl mb-6 flex items-center gap-2"><i data-lucide="list-video" class="text-[#0ea5e9]"></i> Course Content</h3>
+                                <h3 class="font-black text-xl mb-6 flex items-center gap-2"><i data-lucide="list-video" class="text-[#0ea5e9]"></i> Content</h3>
                                 <div class="space-y-4">
                                     <div class="p-5 bg-blue-50 rounded-2xl flex items-center gap-4 cursor-pointer hover:bg-blue-100 transition border-2 border-blue-100">
                                         <div class="bg-[#1e3a8a] text-white w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black">1</div>
                                         <div>
                                             <p class="font-black text-sm text-[#1e3a8a]">${c.lectureTitle || 'Introduction'}</p>
-                                            <p class="text-xs font-bold text-blue-400 uppercase tracking-tighter">Current Lesson</p>
+                                            <p class="text-[10px] font-bold text-blue-400 uppercase tracking-tighter">Current Lesson</p>
                                         </div>
                                     </div>
                                 </div>
                                 <div class="mt-10 pt-10 border-t border-slate-100 space-y-4">
-                                    <p class="text-center text-xs font-black text-slate-300 uppercase tracking-widest">Completion Rewards</p>
+                                    <p class="text-center text-[10px] font-black text-slate-300 uppercase tracking-widest">Course Rewards</p>
                                     <button onclick="claimCertificate('${c.title}')" class="w-full py-5 bg-green-500 text-white rounded-3xl font-black shadow-xl shadow-green-100 hover:bg-green-600 transition transform hover:-translate-y-1">Claim Certificate</button>
                                 </div>
                             </div>
@@ -509,10 +525,10 @@
                 <div class="max-w-6xl mx-auto space-y-10">
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
                         <div>
-                            <h2 class="text-4xl font-black text-[#1e3a8a]">Academy Timetable</h2>
-                            <p class="text-slate-400 font-bold uppercase text-xs tracking-widest mt-1">Scheduled sessions for next 14 days</p>
+                            <h2 class="text-4xl font-black text-[#1e3a8a]">Timetable</h2>
+                            <p class="text-slate-400 font-bold uppercase text-[10px] tracking-[3px] mt-1">Scheduled sessions: Next 14 days</p>
                         </div>
-                        <div class="flex bg-white p-2 rounded-3xl shadow-sm border border-slate-100">
+                        <div class="flex bg-white p-2 rounded-3xl shadow-sm border border-slate-100 self-start">
                             <button onclick="setTimetableWeek(1)" class="px-8 py-3 rounded-2xl font-black text-sm transition ${week === 1 ? 'bg-[#1e3a8a] text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}">Week 1</button>
                             <button onclick="setTimetableWeek(2)" class="px-8 py-3 rounded-2xl font-black text-sm transition ${week === 2 ? 'bg-[#1e3a8a] text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}">Week 2</button>
                         </div>
@@ -520,10 +536,10 @@
 
                     <div class="bg-white border-2 border-slate-50 rounded-[50px] shadow-2xl overflow-hidden">
                         <div class="overflow-x-auto">
-                            <table class="w-full border-collapse">
+                            <table class="w-full border-collapse min-w-[800px]">
                                 <thead>
                                     <tr class="bg-slate-50 border-b-2 border-slate-100">
-                                        <th class="p-8 text-left text-slate-400 text-[10px] font-black uppercase tracking-[3px]">Time / Day</th>
+                                        <th class="p-8 text-left text-slate-400 text-[10px] font-black uppercase tracking-[3px]">Time</th>
                                         ${days.map(d => `<th class="p-8 text-center font-black text-[#1e3a8a] text-lg">${d}</th>`).join('')}
                                     </tr>
                                 </thead>
@@ -535,8 +551,8 @@
                                                 const key = `w${week}_${d}_${t}`;
                                                 const sess = state.timetable[key] || "";
                                                 return `
-                                                    <td onclick="updateSchedule('${d}', '${t}', ${week})" class="p-8 text-center border-l border-slate-50 group hover:bg-sky-50 cursor-pointer transition-all min-w-[150px]">
-                                                        ${sess ? `<span class="bg-[#0ea5e9] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md block animate-in fade-in zoom-in duration-300">${sess}</span>` : `<span class="text-slate-200 text-xs font-bold uppercase tracking-widest group-hover:text-[#0ea5e9] transition">${state.isAdmin ? '+ ADD' : '-'}</span>`}
+                                                    <td onclick="updateSchedule('${d}', '${t}', ${week})" class="p-8 text-center border-l border-slate-50 group hover:bg-sky-50 cursor-pointer transition-all">
+                                                        ${sess ? `<span class="bg-[#0ea5e9] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md block animate-in fade-in zoom-in duration-300 truncate max-w-[120px]">${sess}</span>` : `<span class="text-slate-200 text-[10px] font-black uppercase tracking-widest group-hover:text-[#0ea5e9] transition">${state.isAdmin ? '+ ADD' : '-'}</span>`}
                                                     </td>
                                                 `;
                                             }).join('')}
@@ -553,45 +569,47 @@
         function renderAdminCourses() {
             return `
                 <div class="max-w-6xl mx-auto space-y-10">
-                    <div class="flex items-center justify-between">
+                    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
                         <h2 class="text-4xl font-black text-[#1e3a8a]">Course Management</h2>
-                        <button onclick="navigate('admin-add')" class="bg-[#1e3a8a] text-white px-10 py-4 rounded-3xl font-black shadow-xl hover:bg-[#0ea5e9] transition-all transform hover:-translate-y-1">+ Add New Course</button>
+                        <button onclick="navigate('admin-add')" class="bg-[#1e3a8a] text-white px-10 py-4 rounded-3xl font-black shadow-xl hover:bg-[#0ea5e9] transition-all transform hover:-translate-y-1">+ Add Course</button>
                     </div>
 
                     <div class="bg-white border-2 border-slate-50 rounded-[40px] shadow-2xl overflow-hidden">
-                        <table class="w-full text-left">
-                            <thead class="bg-slate-50 border-b-2 border-slate-100">
-                                <tr>
-                                    <th class="p-8 text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Course Info</th>
-                                    <th class="p-8 text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Financials</th>
-                                    <th class="p-8 text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Status</th>
-                                    <th class="p-8 text-right text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${state.courses.map(c => `
-                                    <tr class="border-b last:border-0 border-slate-50 hover:bg-slate-50/50 transition">
-                                        <td class="p-8">
-                                            <p class="font-black text-xl text-[#1e3a8a]">${c.title}</p>
-                                            <p class="text-xs text-slate-400 font-bold uppercase tracking-tighter">${c.duration || 'N/A'}</p>
-                                        </td>
-                                        <td class="p-8">
-                                            <p class="font-black text-slate-900">${c.price} RWF</p>
-                                        </td>
-                                        <td class="p-8">
-                                            <span class="px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm ${c.status === 'frozen' ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-600'}">
-                                                ${c.status || 'published'}
-                                            </span>
-                                        </td>
-                                        <td class="p-8 text-right space-x-2">
-                                            <button onclick="freezeCourse('${c.id}', '${c.status}')" class="p-3 hover:bg-amber-50 text-amber-500 rounded-2xl transition" title="Freeze/Unfreeze"><i data-lucide="eye-off" class="w-5 h-5"></i></button>
-                                            <button onclick="navigate('admin-edit', ${JSON.stringify(c).replace(/"/g, '&quot;')})" class="p-3 hover:bg-blue-50 text-blue-500 rounded-2xl transition" title="Edit Content"><i data-lucide="edit-3" class="w-5 h-5"></i></button>
-                                            <button onclick="askDelete('${c.id}')" class="p-3 hover:bg-red-50 text-red-600 rounded-2xl transition" title="Delete Permanent"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
-                                        </td>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left min-w-[700px]">
+                                <thead class="bg-slate-50 border-b-2 border-slate-100">
+                                    <tr>
+                                        <th class="p-8 text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Course Info</th>
+                                        <th class="p-8 text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Price</th>
+                                        <th class="p-8 text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Status</th>
+                                        <th class="p-8 text-right text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Actions</th>
                                     </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    ${state.courses.map(c => `
+                                        <tr class="border-b last:border-0 border-slate-50 hover:bg-slate-50/50 transition">
+                                            <td class="p-8">
+                                                <p class="font-black text-xl text-[#1e3a8a] truncate max-w-[250px]">${c.title}</p>
+                                                <p class="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">${c.duration || 'N/A'}</p>
+                                            </td>
+                                            <td class="p-8">
+                                                <p class="font-black text-slate-900">${c.price} RWF</p>
+                                            </td>
+                                            <td class="p-8">
+                                                <span class="px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm ${c.status === 'frozen' ? 'bg-amber-100 text-amber-600' : 'bg-green-100 text-green-600'}">
+                                                    ${c.status || 'published'}
+                                                </span>
+                                            </td>
+                                            <td class="p-8 text-right space-x-2">
+                                                <button onclick="freezeCourse('${c.id}', '${c.status}')" class="p-3 hover:bg-amber-50 text-amber-500 rounded-2xl transition" title="Freeze/Unfreeze"><i data-lucide="eye-off" class="w-5 h-5"></i></button>
+                                                <button onclick="navigate('admin-edit', ${JSON.stringify(c).replace(/"/g, '&quot;')})" class="p-3 hover:bg-blue-50 text-blue-500 rounded-2xl transition" title="Edit"><i data-lucide="edit-3" class="w-5 h-5"></i></button>
+                                                <button onclick="askDelete('${c.id}')" class="p-3 hover:bg-red-50 text-red-500 rounded-2xl transition" title="Delete"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             `;
@@ -602,55 +620,53 @@
             const c = state.editingCourse || {};
             return `
                 <div class="max-w-4xl mx-auto">
-                    <button onclick="navigate('admin-courses')" class="mb-10 flex items-center gap-3 font-black text-slate-400 hover:text-[#1e3a8a] transition uppercase text-xs tracking-widest">
+                    <button onclick="navigate('admin-courses')" class="mb-10 flex items-center gap-3 font-black text-slate-400 hover:text-[#1e3a8a] transition uppercase text-[10px] tracking-widest">
                         <i data-lucide="arrow-left" class="w-4 h-4"></i> Cancel
                     </button>
-                    <h2 class="text-4xl font-black text-[#1e3a8a] mb-10">${isEdit ? 'Edit Course Details' : 'Design New Course'}</h2>
-                    <form onsubmit="saveCourse(event)" class="bg-white border-2 border-slate-100 rounded-[50px] p-12 shadow-2xl space-y-10">
-                        <div class="grid md:grid-cols-2 gap-10">
+                    <h2 class="text-4xl font-black text-[#1e3a8a] mb-10">${isEdit ? 'Edit Course' : 'Create Course'}</h2>
+                    <form onsubmit="saveCourse(event)" class="bg-white border-2 border-slate-50 rounded-[50px] p-8 md:p-12 shadow-2xl space-y-10">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-10">
                             <div class="space-y-6">
-                                <h3 class="text-xs font-black uppercase tracking-[3px] text-slate-400 mb-6">Marketing Data</h3>
+                                <h3 class="text-[10px] font-black uppercase tracking-[3px] text-slate-400 mb-6">Marketing</h3>
                                 <div>
-                                    <label class="block text-xs font-black uppercase text-slate-400 mb-2 ml-1">Title</label>
+                                    <label class="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-1">Title</label>
                                     <input name="title" value="${c.title||''}" required class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
                                 </div>
                                 <div>
-                                    <label class="block text-xs font-black uppercase text-slate-400 mb-2 ml-1">Description</label>
+                                    <label class="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-1">Description</label>
                                     <textarea name="description" required class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-medium h-32">${c.description||''}</textarea>
                                 </div>
                                 <div class="grid grid-cols-2 gap-6">
                                     <div>
-                                        <label class="block text-xs font-black uppercase text-slate-400 mb-2 ml-1">Price (RWF)</label>
+                                        <label class="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-1">Price (RWF)</label>
                                         <input name="price" type="number" value="${c.price||''}" required class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
                                     </div>
                                     <div>
-                                        <label class="block text-xs font-black uppercase text-slate-400 mb-2 ml-1">Duration</label>
+                                        <label class="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-1">Duration</label>
                                         <input name="duration" value="${c.duration||''}" placeholder="e.g. 5h 20m" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
                                     </div>
                                 </div>
                             </div>
                             <div class="space-y-6">
-                                <h3 class="text-xs font-black uppercase tracking-[3px] text-slate-400 mb-6">Course Material</h3>
+                                <h3 class="text-[10px] font-black uppercase tracking-[3px] text-slate-400 mb-6">Content</h3>
                                 <div>
-                                    <label class="block text-xs font-black uppercase text-slate-400 mb-2 ml-1">Thumbnail Link</label>
+                                    <label class="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-1">Thumbnail URL</label>
                                     <input name="thumbnail" value="${c.thumbnail||''}" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
                                 </div>
                                 <div>
-                                    <label class="block text-xs font-black uppercase text-slate-400 mb-2 ml-1">Video / YouTube Link</label>
+                                    <label class="block text-[10px] font-black uppercase text-slate-400 mb-2 ml-1">Video Link (YouTube/Direct)</label>
                                     <input name="videoLink" value="${c.videoLink||''}" required class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
                                 </div>
                                 <div class="p-6 bg-slate-50 rounded-3xl space-y-4">
-                                    <p class="text-xs font-black uppercase text-slate-400">Structure (Initial Chapter)</p>
+                                    <p class="text-[10px] font-black uppercase text-slate-400">Section 1</p>
                                     <input name="chapterTitle" value="${c.chapterTitle||''}" placeholder="Chapter Title" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-white focus:border-[#0ea5e9] outline-none text-sm font-bold">
                                     <input name="lectureTitle" value="${c.lectureTitle||''}" placeholder="Lecture Title" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-white focus:border-[#0ea5e9] outline-none text-sm font-bold">
                                 </div>
                             </div>
                         </div>
-                        <div class="flex gap-6">
-                            <button type="submit" class="flex-1 py-5 bg-[#1e3a8a] text-white rounded-3xl font-black shadow-xl shadow-blue-100 hover:bg-[#0ea5e9] transition-all transform hover:-translate-y-1">
-                                ${isEdit ? 'Update Course' : 'Publish to Academy'}
-                            </button>
-                        </div>
+                        <button type="submit" class="w-full py-5 bg-[#1e3a8a] text-white rounded-3xl font-black shadow-xl shadow-blue-100 hover:bg-[#0ea5e9] transition-all transform hover:-translate-y-1">
+                            ${isEdit ? 'Save Changes' : 'Publish Course'}
+                        </button>
                     </form>
                 </div>
             `;
@@ -663,7 +679,7 @@
                         <div class="w-20 h-20 bg-red-50 rounded-3xl flex items-center justify-center text-red-500 mx-auto mb-6">
                             <i data-lucide="alert-triangle" class="w-10 h-10"></i>
                         </div>
-                        <h3 class="text-3xl font-black text-[#1e3a8a] mb-4">Total Deletion?</h3>
+                        <h3 class="text-3xl font-black text-[#1e3a8a] mb-4">Confirm Delete</h3>
                         <p class="text-slate-500 mb-10 leading-relaxed font-medium">This removes the course from the system totally. Students won't see it ever again. Are you sure?</p>
                         <div class="flex flex-col gap-4">
                             <button onclick="confirmDelete()" class="w-full py-4 bg-red-500 text-white rounded-2xl font-black shadow-xl shadow-red-100 hover:bg-red-600 transition">Yes, Delete Totally</button>
@@ -677,19 +693,11 @@
         function renderDashboard() {
             return `
                 <div class="max-w-5xl mx-auto space-y-12 animate-in fade-in duration-500">
-                    <div>
-                        <h2 class="text-4xl font-black text-[#1e3a8a]">Learning Dashboard</h2>
-                        <p class="text-slate-400 font-bold uppercase text-xs tracking-widest mt-1">Real-time Performance Tracking</p>
-                    </div>
-                    
-                    <div class="bg-white border-2 border-slate-50 rounded-[50px] p-12 shadow-2xl">
-                        <div class="flex items-center justify-between mb-10">
-                            <h3 class="text-2xl font-black text-[#1e3a8a]">Progress Statistics</h3>
-                            <i data-lucide="activity" class="text-[#0ea5e9]"></i>
-                        </div>
+                    <h2 class="text-4xl font-black text-[#1e3a8a]">Learning Tracker</h2>
+                    <div class="bg-white border-2 border-slate-50 rounded-[50px] p-8 md:p-12 shadow-2xl">
                         <div class="grid md:grid-cols-2 gap-10">
                             <div class="p-8 bg-slate-50 rounded-[30px] border border-slate-100">
-                                <p class="text-xs font-black text-slate-400 uppercase tracking-widest mb-4">Course Mastery</p>
+                                <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Activity</p>
                                 <div class="flex items-end gap-4 h-32">
                                     <div class="bg-[#1e3a8a] w-full rounded-t-xl h-[40%]"></div>
                                     <div class="bg-[#0ea5e9] w-full rounded-t-xl h-[85%]"></div>
@@ -697,18 +705,15 @@
                                     <div class="bg-[#1e3a8a] w-full rounded-t-xl h-[60%]"></div>
                                 </div>
                             </div>
-                            <div class="space-y-6">
+                            <div class="space-y-6 flex flex-col justify-center">
                                 <div class="bg-blue-50/50 p-6 rounded-3xl">
-                                    <p class="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Ongoing Specialization</p>
-                                    <p class="font-black text-[#1e3a8a]">AI Filmmaking Masterclass</p>
+                                    <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Goal Status</p>
+                                    <p class="font-black text-[#1e3a8a]">Filmmaking Specialization</p>
                                     <div class="w-full bg-slate-200 h-2 rounded-full mt-4 overflow-hidden">
-                                        <div class="bg-[#0ea5e9] h-full w-[65%]"></div>
+                                        <div class="bg-[#0ea5e9] h-full w-[15%]"></div>
                                     </div>
                                 </div>
-                                <div class="bg-slate-50/50 p-6 rounded-3xl">
-                                    <p class="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Next Session</p>
-                                    <p class="font-black text-slate-700">Check Timetable for upcoming 10:00 AM slots</p>
-                                </div>
+                                <p class="text-xs text-slate-400 font-bold italic">Progress is calculated based on completed course hours.</p>
                             </div>
                         </div>
                     </div>
@@ -721,36 +726,31 @@
             return `
                 <div class="max-w-xl mx-auto space-y-10 text-center animate-in slide-in-from-top-10 duration-700">
                     <div class="relative inline-block">
-                        <div class="w-40 h-40 bg-[#1e3a8a] rounded-[50px] shadow-2xl flex items-center justify-center text-white mb-6">
+                        <div class="w-32 md:w-40 h-32 md:h-40 bg-[#1e3a8a] rounded-[50px] shadow-2xl flex items-center justify-center text-white mb-6">
                             <i data-lucide="user" class="w-20 h-20"></i>
-                        </div>
-                        <div class="absolute -bottom-2 -right-2 bg-[#0ea5e9] w-12 h-12 rounded-2xl flex items-center justify-center text-white border-4 border-slate-50">
-                            <i data-lucide="check" class="w-6 h-6"></i>
                         </div>
                     </div>
                     
                     <div>
-                        <h2 class="text-4xl font-black text-[#1e3a8a]">${profile.name || 'User'}</h2>
-                        <p class="text-[#0ea5e9] font-black uppercase text-xs tracking-[4px] mt-2">${state.isAdmin ? 'NAD Production Director' : 'Cinematic Student'}</p>
+                        <h2 class="text-4xl font-black text-[#1e3a8a]">${profile.name || 'Student'}</h2>
+                        <p class="text-[#0ea5e9] font-black uppercase text-[10px] tracking-[4px] mt-2">${state.isAdmin ? 'Admin' : 'Member'}</p>
                     </div>
 
-                    <div class="bg-white border-2 border-slate-50 rounded-[50px] p-12 shadow-2xl space-y-8 text-left">
-                        <div class="space-y-2">
-                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Full Identity</p>
+                    <div class="bg-white border-2 border-slate-50 rounded-[50px] p-8 md:p-12 shadow-2xl space-y-8 text-left">
+                        <div class="space-y-1">
+                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Name</p>
                             <p class="font-bold text-slate-900 border-b pb-4">${profile.name || 'N/A'}</p>
                         </div>
-                        <div class="space-y-2">
-                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Email Access</p>
-                            <p class="font-bold text-slate-900 border-b pb-4">${profile.email || state.user?.email}</p>
+                        <div class="space-y-1">
+                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Email</p>
+                            <p class="font-bold text-slate-900 border-b pb-4">${profile.email || state.user?.email || 'N/A'}</p>
                         </div>
-                        <div class="space-y-2">
-                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gender Profile</p>
+                        <div class="space-y-1">
+                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gender</p>
                             <p class="font-bold text-slate-900">${profile.gender === 'M' ? 'Male' : (profile.gender === 'F' ? 'Female' : 'N/A')}</p>
                         </div>
                         
-                        <div class="pt-10 flex flex-col gap-4">
-                            <button onclick="logout()" class="w-full py-5 border-2 border-red-500 text-red-500 rounded-3xl font-black hover:bg-red-500 hover:text-white transition-all transform hover:scale-[1.02]">Sign Out Account</button>
-                        </div>
+                        <button onclick="logout()" class="w-full py-5 border-2 border-red-500 text-red-500 rounded-3xl font-black hover:bg-red-500 hover:text-white transition-all transform hover:scale-[1.02]">Sign Out</button>
                     </div>
                 </div>
             `;
@@ -759,17 +759,17 @@
         function renderFooter() {
             return `
                 <footer class="bg-white border-t p-12 mt-auto">
-                    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-12">
-                        <div class="text-center md:text-left space-y-2">
+                    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-12 text-center md:text-left">
+                        <div class="space-y-2">
                             <p class="text-[#1e3a8a] font-black text-lg tracking-tight">NAD PRODUCTION</p>
-                            <p class="text-slate-400 font-bold text-xs uppercase tracking-widest">Developed by NAD PRODUCTION. All right reserved.</p>
-                            <p class="text-slate-300 font-bold text-xs mt-1">© NAD PRODUCTION 2026</p>
+                            <p class="text-slate-400 font-bold text-[10px] uppercase tracking-widest">Developed by NAD PRODUCTION. All right reserved.</p>
+                            <p class="text-slate-300 font-bold text-[10px] mt-1">© NAD PRODUCTION 2026</p>
                         </div>
                         <div class="flex items-center gap-6">
-                            <a href="#" class="w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-50 transition"><i data-lucide="instagram"></i></a>
-                            <a href="https://wa.me/250786487234" target="_blank" class="w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-50 transition"><i data-lucide="message-circle"></i></a>
-                            <a href="mailto:nadjibullahu@gmail.com" class="w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-50 transition"><i data-lucide="mail"></i></a>
-                            <a href="#" class="w-14 h-14 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-50 transition"><i data-lucide="youtube"></i></a>
+                            <a href="#" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-50 transition"><i data-lucide="instagram" class="w-5 h-5"></i></a>
+                            <a href="https://wa.me/250786487234" target="_blank" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-50 transition"><i data-lucide="message-circle" class="w-5 h-5"></i></a>
+                            <a href="mailto:nadjibullahu@gmail.com" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-50 transition"><i data-lucide="mail" class="w-5 h-5"></i></a>
+                            <a href="#" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-50 transition"><i data-lucide="youtube" class="w-5 h-5"></i></a>
                         </div>
                     </div>
                 </footer>
