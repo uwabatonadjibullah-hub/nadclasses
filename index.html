@@ -37,6 +37,7 @@
             timetable: {},
             timetableWeek: 1,
             activeCourse: null,
+            currentVideoLink: null, // Tracks the currently playing video (promo or specific lecture)
             pendingCourse: null, 
             isAdmin: false,
             editingCourse: null,
@@ -50,15 +51,14 @@
 
         // Auth Logic
         async function initAuth() {
-    try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-            await signInWithCustomToken(auth, __initial_auth_token);
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                }
+            } catch (err) {
+                console.warn("Auth Note:", err.message);
+            }
         }
-        // Remove signInAnonymously — just show the login screen for unauthenticated users
-    } catch (err) {
-        console.warn("Auth Note:", err.message);
-    }
-}
         initAuth();
 
         onAuthStateChanged(auth, async (user) => {
@@ -151,8 +151,22 @@
                 state.editingCourse = null;
                 state.formChapters = [{ title: '', lectures: [{ title: '', link: '' }] }];
             }
-            if (view === 'course-player') state.activeCourse = payload;
+            if (view === 'course-player') {
+                state.activeCourse = payload;
+                state.currentVideoLink = payload.videoLink; // Load the promo video initially
+            }
             render();
+        };
+
+        // NEW: Function to play specific lecture videos
+        window.playLecture = (link) => {
+            if (!link) {
+                showMessage("No video link provided for this lecture.", "error");
+                return;
+            }
+            state.currentVideoLink = link;
+            render();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
         };
 
         window.handlePayment = async (e) => {
@@ -168,7 +182,6 @@
             }
 
             try {
-                // Store payment record in database
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'payments'), {
                     userId: state.user.uid,
                     userEmail: state.user.email,
@@ -190,6 +203,7 @@
                 
                 state.profile.enrolled = enrolled;
                 state.activeCourse = state.pendingCourse;
+                state.currentVideoLink = state.pendingCourse.videoLink;
                 state.pendingCourse = null;
                 state.view = 'course-player';
                 showMessage("Payment Verified! Course unlocked.", "success");
@@ -214,7 +228,6 @@
             render();
         };
 
-        // Syllabus builder logic
         window.addChapter = () => { state.formChapters.push({ title: '', lectures: [{ title: '', link: '' }] }); render(); };
         window.removeChapter = (idx) => { state.formChapters.splice(idx, 1); render(); };
         window.addLecture = (chapIdx) => { state.formChapters[chapIdx].lectures.push({ title: '', link: '' }); render(); };
@@ -222,7 +235,6 @@
         window.updateChapterField = (chapIdx, field, val) => { state.formChapters[chapIdx][field] = val; };
         window.updateLectureField = (chapIdx, lecIdx, field, val) => { state.formChapters[chapIdx].lectures[lecIdx][field] = val; };
 
-        // Save Course functionality: now handles complex chapter structure in database
         window.saveCourse = async (e) => {
             e.preventDefault();
             const f = new FormData(e.target);
@@ -232,8 +244,8 @@
                 price: f.get('price'),
                 duration: f.get('duration'),
                 thumbnail: f.get('thumbnail'),
-                videoLink: f.get('videoLink'), // Course promo video
-                chapters: state.formChapters, // Full nested structure saved to database
+                videoLink: f.get('videoLink'), 
+                chapters: state.formChapters, 
                 status: state.editingCourse?.status || 'published'
             };
 
@@ -283,12 +295,6 @@
         };
 
         window.setTimetableWeek = (w) => { state.timetableWeek = w; render(); };
-
-        window.claimCertificate = (course) => {
-            const subject = encodeURIComponent(`Claim Certificate: ${course}`);
-            const body = encodeURIComponent(`I have completed ${course}.\n\nStudent: ${state.profile?.name}\nEmail: ${state.user?.email}`);
-            window.location.href = `mailto:nadjibullahu@gmail.com?subject=${subject}&body=${body}`;
-        };
 
         // --- UI Rendering ---
 
@@ -535,8 +541,23 @@
         function renderCoursePlayer() {
             const c = state.activeCourse;
             if (!c) return `<div>Course not found.</div>`;
-            const isYT = c.videoLink?.includes('youtube.com') || c.videoLink?.includes('youtu.be');
-            let ytId = ''; if (isYT) ytId = c.videoLink.split('v=')[1] || c.videoLink.split('/').pop();
+            
+            // Get the specific link currently selected to play (or default to main course link)
+            const currentLink = state.currentVideoLink || c.videoLink;
+            const isYT = currentLink?.includes('youtube.com') || currentLink?.includes('youtu.be');
+            
+            let ytId = ''; 
+            if (isYT) {
+                // ROBUST ID EXTRACTION: ignores ?si= and other extra URL params safely
+                const regExp = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+                const match = currentLink.match(regExp);
+                if (match && match[2].length === 11) {
+                    ytId = match[2];
+                } else {
+                    // Safety Fallback
+                    ytId = currentLink.split('v=')[1]?.split('&')[0] || currentLink.split('/').pop()?.split('?')[0];
+                }
+            }
 
             return `
                 <div class="max-w-6xl mx-auto space-y-10 animate-in fade-in duration-500">
@@ -546,8 +567,8 @@
                     <div class="grid lg:grid-cols-3 gap-10">
                         <div class="lg:col-span-2 space-y-8">
                             <div class="aspect-video bg-black rounded-[40px] overflow-hidden shadow-2xl">
-                                ${isYT ? `<iframe class="w-full h-full" src="https://www.youtube.com/embed/${ytId}" frameborder="0" allowfullscreen></iframe>` : 
-                                `<div class="h-full flex flex-col items-center justify-center text-white"><a href="${c.videoLink}" target="_blank" class="bg-[#0ea5e9] px-10 py-4 rounded-3xl font-black">Play Media</a></div>`}
+                                ${isYT ? `<iframe class="w-full h-full" src="https://www.youtube.com/embed/${ytId}?rel=0" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>` : 
+                                `<div class="h-full flex flex-col items-center justify-center text-white"><a href="${currentLink}" target="_blank" class="bg-[#0ea5e9] px-10 py-4 rounded-3xl font-black hover:bg-blue-500 transition">Play External Media</a></div>`}
                             </div>
                             <h1 class="text-4xl font-black text-[#1e3a8a] mb-4">${c.title}</h1>
                             <p class="text-slate-500 text-lg leading-relaxed bg-white p-8 rounded-[30px] border border-slate-100">${c.description}</p>
@@ -559,12 +580,14 @@
                                     <div class="space-y-3">
                                         <p class="font-black text-sm text-[#1e3a8a] uppercase">${chapIdx+1}. ${ch.title}</p>
                                         <div class="pl-4 space-y-2">
-                                            ${(ch.lectures || []).map((lec, lecIdx) => `
-                                                <div class="p-3 bg-slate-50 hover:bg-blue-50 rounded-xl flex items-center justify-between cursor-pointer transition">
-                                                    <p class="text-xs font-bold text-slate-600 truncate">${lec.title}</p>
-                                                    <i data-lucide="play-circle" class="w-4 h-4 text-[#0ea5e9]"></i>
+                                            ${(ch.lectures || []).map((lec, lecIdx) => {
+                                                const isActive = currentLink === lec.link;
+                                                return `
+                                                <div onclick="playLecture('${lec.link}')" class="p-3 ${isActive ? 'bg-[#0ea5e9] text-white shadow-md' : 'bg-slate-50 hover:bg-blue-50 text-slate-600'} rounded-xl flex items-center justify-between cursor-pointer transition">
+                                                    <p class="text-xs font-bold truncate">${lec.title}</p>
+                                                    <i data-lucide="${isActive ? 'play' : 'play-circle'}" class="w-4 h-4 ${isActive ? 'text-white' : 'text-[#0ea5e9]'}"></i>
                                                 </div>
-                                            `).join('')}
+                                            `}).join('')}
                                         </div>
                                     </div>
                                 `).join('')}
