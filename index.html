@@ -9,7 +9,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = { 
             apiKey: "AIzaSyAgzwrI7LHptStmqnEuqB6LM72m9w3WMWs",
@@ -182,7 +182,18 @@
             }
 
             try {
-                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'payments'), {
+                // Fetch existing payments to check for duplicates
+                const paymentsCol = collection(db, 'artifacts', appId, 'public', 'data', 'payments');
+                const paymentsSnap = await getDocs(paymentsCol);
+                const isUsed = paymentsSnap.docs.some(doc => doc.data().txid === txidStr);
+
+                if (isUsed) {
+                    showMessage("Transaction ID has already been used.", "error");
+                    return;
+                }
+
+                // Store payment record in database
+                await addDoc(paymentsCol, {
                     userId: state.user.uid,
                     userEmail: state.user.email,
                     payerName: payerName,
