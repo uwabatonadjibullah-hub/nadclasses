@@ -3,829 +3,371 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NAD CLASS | Filmmaking & Design</title>
+    <title>NAD PROJECTS | Cinematic Productions</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        const firebaseConfig = { 
-            apiKey: "AIzaSyAgzwrI7LHptStmqnEuqB6LM72m9w3WMWs",
-            authDomain: "nadclasses.firebaseapp.com",
-            projectId: "nadclasses",
-            storageBucket: "nadclasses.firebasestorage.app",
-            messagingSenderId: "79531197579",
-            appId: "1:79531197579:web:6671e03b4b569fa461c08e",
-            measurementId: "G-CCTB8LHD1Q"
-        };
-
-        const actualConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfig;
-        const app = initializeApp(actualConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'nad-class-app';
-
-        // Application State
-        window.state = {
-            user: null,
-            profile: null,
-            view: 'auth',
-            sidebarOpen: true,
-            courses: [],
-            timetable: {},
-            timetableWeek: 1,
-            activeCourse: null,
-            currentVideoLink: null, // Tracks the currently playing video (promo or specific lecture)
-            pendingCourse: null, 
-            isAdmin: false,
-            editingCourse: null,
-            formChapters: [{ title: '', lectures: [{ title: '', link: '' }] }],
-            showDeleteConfirm: null,
-            message: null 
-        };
-
-        const ADMIN_EMAIL = "nadjibullahu@gmail.com";
-        const MIN_TXID = 25974893559;
-
-        // Auth Logic
-        async function initAuth() {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                }
-            } catch (err) {
-                console.warn("Auth Note:", err.message);
-            }
-        }
-        initAuth();
-
-        onAuthStateChanged(auth, async (user) => {
-            if (user && !user.isAnonymous) {
-                state.user = user;
-                state.isAdmin = user.email === ADMIN_EMAIL;
-                
-                const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'details');
-                try {
-                    const profileSnap = await getDoc(profileRef);
-                    if (profileSnap.exists()) {
-                        state.profile = profileSnap.data();
-                        if (!state.profile.enrolled) state.profile.enrolled = [];
-                    } else if (state.isAdmin) {
-                        state.profile = { name: "Nadjibullah UWABATO", gender: "M", email: ADMIN_EMAIL, enrolled: [] };
-                    } else {
-                        state.profile = { name: "Learner", enrolled: [] };
-                    }
-                } catch (e) {
-                    console.error("Profile Fetch Error:", e);
-                    state.profile = { name: "Learner", enrolled: [] };
-                }
-                
-                state.view = 'home';
-                initDataListeners();
-            } else {
-                state.user = null;
-                state.profile = null;
-                state.view = 'auth';
-                render();
-            }
-        });
-
-        function initDataListeners() {
-            if (!state.user) return;
-            // Listen to the Database collection 'courses'
-            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'courses'), (snap) => {
-                state.courses = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                render();
-            });
-            // Listen to Timetable in database
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'timetable', 'main'), (snap) => {
-                if (snap.exists()) {
-                    state.timetable = snap.data();
-                    render();
-                }
-            });
-        }
-
-        // --- Logic Actions ---
-
-        window.handleAuth = async (e) => {
-            e.preventDefault();
-            const email = e.target.email.value;
-            const password = e.target.password.value;
-            const isLogin = e.target.dataset.type === 'login';
-
-            try {
-                if (isLogin) {
-                    await signInWithEmailAndPassword(auth, email, password);
-                } else {
-                    const name = e.target.fullname.value;
-                    const gender = e.target.gender.value;
-                    const cred = await createUserWithEmailAndPassword(auth, email, password);
-                    await setDoc(doc(db, 'artifacts', appId, 'users', cred.user.uid, 'profile', 'details'), {
-                        name, email, gender, role: 'student', enrolled: []
-                    });
-                }
-            } catch (err) { 
-                showMessage(err.message, "error");
-            }
-        };
-
-        window.navigate = (view, payload = null) => {
-            if (view === 'course-player' && !state.isAdmin) {
-                const isEnrolled = state.profile?.enrolled?.includes(payload.id);
-                if (!isEnrolled) {
-                    state.pendingCourse = payload;
-                    state.view = 'payment-verify';
-                    render();
-                    return;
-                }
-            }
-            
-            state.view = view;
-            if (view === 'admin-edit') {
-                state.editingCourse = payload;
-                state.formChapters = payload.chapters || [{ title: '', lectures: [{ title: '', link: '' }] }];
-            } else if (view === 'admin-add') {
-                state.editingCourse = null;
-                state.formChapters = [{ title: '', lectures: [{ title: '', link: '' }] }];
-            }
-            if (view === 'course-player') {
-                state.activeCourse = payload;
-                state.currentVideoLink = payload.videoLink; // Load the promo video initially
-            }
-            render();
-        };
-
-        // NEW: Function to play specific lecture videos
-        window.playLecture = (link) => {
-            if (!link) {
-                showMessage("No video link provided for this lecture.", "error");
-                return;
-            }
-            state.currentVideoLink = link;
-            render();
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        };
-
-        window.handlePayment = async (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            const payerName = formData.get('payerName');
-            const txidStr = formData.get('txid');
-            const txid = parseInt(txidStr);
-
-            if (!txid || txid <= MIN_TXID) {
-                showMessage(`Verification failed. Please ensure your Transaction ID is correct and valid.`, "error");
-                return;
-            }
-
-            try {
-                // Fetch existing payments to check for duplicates
-                const paymentsCol = collection(db, 'artifacts', appId, 'public', 'data', 'payments');
-                const paymentsSnap = await getDocs(paymentsCol);
-                const isUsed = paymentsSnap.docs.some(doc => doc.data().txid === txidStr);
-
-                if (isUsed) {
-                    showMessage("Transaction ID has already been used.", "error");
-                    return;
-                }
-
-                // Store payment record in database
-                await addDoc(paymentsCol, {
-                    userId: state.user.uid,
-                    userEmail: state.user.email,
-                    payerName: payerName,
-                    txid: txidStr,
-                    courseId: state.pendingCourse.id,
-                    courseTitle: state.pendingCourse.title,
-                    amount: state.pendingCourse.price,
-                    timestamp: new Date().toISOString()
-                });
-
-                if (!state.profile) { state.profile = { enrolled: [] }; }
-                
-                const enrolled = state.profile.enrolled || [];
-                if (!enrolled.includes(state.pendingCourse.id)) { enrolled.push(state.pendingCourse.id); }
-                
-                const profileRef = doc(db, 'artifacts', appId, 'users', state.user.uid, 'profile', 'details');
-                await setDoc(profileRef, { ...state.profile, enrolled: enrolled }, { merge: true });
-                
-                state.profile.enrolled = enrolled;
-                state.activeCourse = state.pendingCourse;
-                state.currentVideoLink = state.pendingCourse.videoLink;
-                state.pendingCourse = null;
-                state.view = 'course-player';
-                showMessage("Payment Verified! Course unlocked.", "success");
-                render();
-            } catch (err) {
-                showMessage("Verification Error: " + err.message, "error");
-            }
-        };
-
-        window.showMessage = (text, type) => {
-            state.message = { text, type };
-            render();
-            setTimeout(() => { state.message = null; render(); }, 4000);
-        };
-
-        window.toggleSidebar = () => { state.sidebarOpen = !state.sidebarOpen; render(); };
-        window.logout = async () => {
-            await signOut(auth);
-            state.user = null;
-            state.profile = null;
-            state.view = 'auth';
-            render();
-        };
-
-        window.addChapter = () => { state.formChapters.push({ title: '', lectures: [{ title: '', link: '' }] }); render(); };
-        window.removeChapter = (idx) => { state.formChapters.splice(idx, 1); render(); };
-        window.addLecture = (chapIdx) => { state.formChapters[chapIdx].lectures.push({ title: '', link: '' }); render(); };
-        window.removeLecture = (chapIdx, lecIdx) => { state.formChapters[chapIdx].lectures.splice(lecIdx, 1); render(); };
-        window.updateChapterField = (chapIdx, field, val) => { state.formChapters[chapIdx][field] = val; };
-        window.updateLectureField = (chapIdx, lecIdx, field, val) => { state.formChapters[chapIdx].lectures[lecIdx][field] = val; };
-
-        window.saveCourse = async (e) => {
-            e.preventDefault();
-            const f = new FormData(e.target);
-            const data = {
-                title: f.get('title'),
-                description: f.get('description'),
-                price: f.get('price'),
-                duration: f.get('duration'),
-                thumbnail: f.get('thumbnail'),
-                videoLink: f.get('videoLink'), 
-                chapters: state.formChapters, 
-                status: state.editingCourse?.status || 'published'
-            };
-
-            const coursesCol = collection(db, 'artifacts', appId, 'public', 'data', 'courses');
-            
-            try {
-                if (state.editingCourse) {
-                    const courseRef = doc(db, 'artifacts', appId, 'public', 'data', 'courses', state.editingCourse.id);
-                    await updateDoc(courseRef, data);
-                    showMessage("Course updated successfully in Database", "success");
-                } else {
-                    await addDoc(coursesCol, data);
-                    showMessage("Course added successfully to Database", "success");
-                }
-                navigate('admin-courses');
-            } catch (err) {
-                showMessage("Database error: " + err.message, "error");
-            }
-        };
-
-        window.freezeCourse = async (id, status) => {
-            const newStatus = status === 'frozen' ? 'published' : 'frozen';
-            const courseRef = doc(db, 'artifacts', appId, 'public', 'data', 'courses', id);
-            await updateDoc(courseRef, { status: newStatus });
-        };
-
-        window.askDelete = (id) => { state.showDeleteConfirm = id; render(); };
-        window.cancelDelete = () => { state.showDeleteConfirm = null; render(); };
-        window.confirmDelete = async () => {
-            const courseRef = doc(db, 'artifacts', appId, 'public', 'data', 'courses', state.showDeleteConfirm);
-            await deleteDoc(courseRef);
-            state.showDeleteConfirm = null;
-            showMessage("Course removed from Database", "success");
-            render();
-        };
-
-        window.updateSchedule = async (day, time, week) => {
-            if (!state.isAdmin) return;
-            const key = `w${week}_${day}_${time}`;
-            const existing = state.timetable[key] || "";
-            const task = prompt(`Schedule session:`, existing);
-            if (task !== null) {
-                const update = {}; update[key] = task;
-                const timetableRef = doc(db, 'artifacts', appId, 'public', 'data', 'timetable', 'main');
-                await setDoc(timetableRef, update, { merge: true });
-            }
-        };
-
-        window.setTimetableWeek = (w) => { state.timetableWeek = w; render(); };
-
-        // --- UI Rendering ---
-
-        function render() {
-            const root = document.getElementById('root');
-            if (!root) return;
-            
-            if (state.view === 'auth') {
-                root.innerHTML = renderAuth();
-            } else {
-                root.innerHTML = `
-                    <div class="flex h-screen bg-slate-50 overflow-hidden">
-                        ${renderSidebar()}
-                        <div class="flex-1 flex flex-col overflow-hidden">
-                            ${renderHeader()}
-                            <main class="flex-1 overflow-y-auto p-6 md:p-10 relative">
-                                ${state.message ? `
-                                    <div class="fixed top-24 right-10 z-[200] p-4 rounded-2xl shadow-2xl animate-in slide-in-from-top-4 duration-300 ${state.message.type === 'error' ? 'bg-red-500' : 'bg-[#0ea5e9]'} text-white font-bold text-sm">
-                                        ${state.message.text}
-                                    </div>
-                                ` : ''}
-                                ${renderView()}
-                                ${state.showDeleteConfirm ? renderDeleteModal() : ''}
-                            </main>
-                            ${renderFooter()}
-                        </div>
-                    </div>
-                `;
-            }
-            lucide.createIcons();
-        }
-
-        function renderAuth() {
-            return `
-                <div class="min-h-screen flex items-center justify-center bg-[#1e3a8a] p-6">
-                    <div class="bg-white p-10 rounded-[40px] shadow-2xl w-full max-w-md animate-in fade-in zoom-in duration-300">
-                        <div class="text-center mb-10">
-                            <div class="bg-[#0ea5e9] w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-4 text-white shadow-lg">
-                                <i data-lucide="camera" class="w-8 h-8"></i>
-                            </div>
-                            <h1 class="text-3xl font-black text-[#1e3a8a]">NAD CLASS</h1>
-                            <p class="text-slate-400 font-medium">Academy of Filmmaking & Design</p>
-                        </div>
-                        <form onsubmit="handleAuth(event)" data-type="login" id="authForm" class="space-y-4">
-                            <div id="regFields" class="hidden space-y-4">
-                                <div>
-                                    <label class="block text-xs font-black uppercase text-slate-400 mb-1 ml-1">Full Name</label>
-                                    <input name="fullname" type="text" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none transition">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-black uppercase text-slate-400 mb-1 ml-1">Gender</label>
-                                    <select name="gender" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none transition">
-                                        <option value="M">Male</option>
-                                        <option value="F">Female</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-black uppercase text-slate-400 mb-1 ml-1">Email Address</label>
-                                <input name="email" type="email" required class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none transition">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-black uppercase text-slate-400 mb-1 ml-1">Password</label>
-                                <input name="password" type="password" required class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none transition">
-                            </div>
-                            <button type="submit" class="w-full py-4 bg-[#1e3a8a] text-white rounded-2xl font-black shadow-lg hover:bg-[#0ea5e9] transition-all transform hover:scale-[1.02]">
-                                <span id="authBtnText">Login</span>
-                            </button>
-                        </form>
-                        <div class="mt-8 text-center">
-                            <button onclick="toggleAuthMode()" class="text-[#0ea5e9] font-black text-sm" id="toggleAuthBtn">Don't have an account? Sign up</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        window.toggleAuthMode = () => {
-            const form = document.getElementById('authForm');
-            const regFields = document.getElementById('regFields');
-            const btnText = document.getElementById('authBtnText');
-            const toggleBtn = document.getElementById('toggleAuthBtn');
-            if (form.dataset.type === 'login') {
-                form.dataset.type = 'signup';
-                regFields.classList.remove('hidden');
-                btnText.innerText = 'Create Account';
-                toggleBtn.innerText = 'Already have an account? Login';
-            } else {
-                form.dataset.type = 'login';
-                regFields.classList.add('hidden');
-                btnText.innerText = 'Login';
-                toggleBtn.innerText = "Don't have an account? Sign up";
-            }
-        };
-
-        function renderSidebar() {
-            const menu = [
-                { id: 'home', icon: 'home', label: 'Home' },
-                { id: 'dashboard', icon: 'layout-dashboard', label: 'Dashboard' },
-                { id: 'courses', icon: 'book-open', label: 'Courses' },
-                { id: 'timetable', icon: 'calendar', label: 'Timetable' },
-            ];
-            if (state.isAdmin) menu.push({ id: 'admin-courses', icon: 'shield-check', label: 'Admin Courses' });
-
-            return `
-                <aside class="bg-[#1e3a8a] text-white flex flex-col transition-all duration-300 ${state.sidebarOpen ? 'w-72' : 'w-24'}">
-                    <div class="p-8 flex items-center gap-4">
-                        <div class="bg-[#0ea5e9] p-2 rounded-xl shrink-0"><i data-lucide="clapperboard" class="w-6 h-6"></i></div>
-                        ${state.sidebarOpen ? '<span class="font-black text-xl tracking-tighter text-nowrap">NAD CLASS</span>' : ''}
-                    </div>
-                    <nav class="flex-1 px-4 space-y-2 mt-4">
-                        ${menu.map(m => `
-                            <button onclick="navigate('${m.id}')" class="w-full flex items-center gap-4 p-4 rounded-2xl transition-all ${state.view === m.id ? 'bg-[#0ea5e9] shadow-lg shadow-blue-900/50' : 'hover:bg-blue-800 text-blue-200'}">
-                                <i data-lucide="${m.icon}" class="w-6 h-6 shrink-0"></i>
-                                ${state.sidebarOpen ? `<span class="font-bold text-nowrap">${m.label}</span>` : ''}
-                            </button>
-                        `).join('')}
-                    </nav>
-                    <div class="p-4 border-t border-blue-800 space-y-2">
-                        <button onclick="navigate('profile')" class="w-full flex items-center gap-4 p-4 rounded-2xl text-blue-200 hover:bg-blue-800 transition">
-                            <i data-lucide="user" class="w-6 h-6 shrink-0"></i>
-                            ${state.sidebarOpen ? '<span class="font-bold text-nowrap">Profile</span>' : ''}
-                        </button>
-                        <button onclick="logout()" class="w-full flex items-center gap-4 p-4 rounded-2xl text-red-400 hover:bg-red-900/20 transition">
-                            <i data-lucide="log-out" class="w-6 h-6 shrink-0"></i>
-                            ${state.sidebarOpen ? '<span class="font-bold text-nowrap">Log out</span>' : ''}
-                        </button>
-                    </div>
-                </aside>
-            `;
-        }
-
-        function renderHeader() {
-            const name = state.profile?.name || (state.isAdmin ? "Nadjibullah UWABATO" : "Student");
-            return `
-                <header class="bg-white/80 backdrop-blur-md sticky top-0 z-30 border-b h-20 flex items-center justify-between px-10">
-                    <button onclick="toggleSidebar()" class="p-3 hover:bg-slate-100 rounded-2xl transition"><i data-lucide="menu"></i></button>
-                    <div class="flex items-center gap-8">
-                        <div class="text-right hidden sm:block">
-                            <p class="text-xs font-black text-slate-400 uppercase tracking-widest">Signed in as</p>
-                            <p class="font-bold text-[#1e3a8a] truncate max-w-[150px]">${name}</p>
-                        </div>
-                        <a href="https://booknadprod.web.app/" target="_blank" class="bg-[#1e3a8a] text-white px-6 py-3 rounded-2xl font-black text-sm hover:bg-[#0ea5e9] transition-all shadow-lg shadow-blue-100">BOOK NAD</a>
-                    </div>
-                </header>
-            `;
-        }
-
-        function renderView() {
-            switch(state.view) {
-                case 'home': return renderHome();
-                case 'courses': return renderCourses();
-                case 'dashboard': return renderDashboard();
-                case 'timetable': return renderTimetable();
-                case 'profile': return renderProfile();
-                case 'admin-courses': return renderAdminCourses();
-                case 'admin-add':
-                case 'admin-edit': return renderCourseForm();
-                case 'course-player': return renderCoursePlayer();
-                case 'payment-verify': return renderPaymentVerify();
-                default: return `<div>View not found</div>`;
-            }
-        }
-
-        function renderHome() {
-            const name = state.profile?.name || (state.isAdmin ? "Nadjibullah" : "Learner");
-            return `
-                <div class="max-w-5xl mx-auto space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                    <div class="bg-gradient-to-br from-[#1e3a8a] to-[#0ea5e9] p-8 md:p-16 rounded-[50px] text-white relative overflow-hidden shadow-2xl">
-                        <div class="relative z-10">
-                            <h1 class="text-4xl md:text-6xl font-black mb-6">Welcome, ${name}!</h1>
-                            <p class="text-blue-100 text-lg md:text-xl max-w-lg leading-relaxed">Your professional media production academy.</p>
-                            <button onclick="navigate('courses')" class="mt-10 bg-white text-[#1e3a8a] px-10 py-4 rounded-3xl font-black text-lg hover:shadow-2xl transition transform hover:scale-105">View Catalog</button>
-                        </div>
-                        <i data-lucide="sparkles" class="absolute -right-10 -bottom-10 w-80 h-80 text-white/10 rotate-12"></i>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderPaymentVerify() {
-            const c = state.pendingCourse;
-            return `
-                <div class="max-w-2xl mx-auto animate-in slide-in-from-bottom-8 duration-500">
-                    <div class="bg-white border-2 border-slate-50 rounded-[50px] p-10 shadow-2xl space-y-10">
-                        <div class="text-center space-y-4">
-                            <div class="bg-amber-50 w-20 h-20 rounded-[30px] flex items-center justify-center text-amber-500 mx-auto mb-6 shadow-lg shadow-amber-100">
-                                <i data-lucide="wallet" class="w-10 h-10"></i>
-                            </div>
-                            <h2 class="text-4xl font-black text-[#1e3a8a]">Unlock Course</h2>
-                            <p class="text-slate-500 font-medium">To access <span class="font-black text-[#0ea5e9]">"${c.title}"</span>, please complete the MOMO Pay payment.</p>
-                        </div>
-                        <div class="bg-slate-900 rounded-[30px] p-8 text-center space-y-4 border-4 border-[#0ea5e9]">
-                            <p class="text-xs font-black text-[#0ea5e9] uppercase tracking-widest">Dial this code to pay</p>
-                            <h3 class="text-3xl font-black text-white">*182*8*1*389763#</h3>
-                            <p class="text-slate-400 font-bold text-sm">Amount: ${c.price} RWF</p>
-                        </div>
-                        <form onsubmit="handlePayment(event)" class="space-y-6">
-                            <div class="space-y-2">
-                                <label class="block text-xs font-black text-slate-400 uppercase ml-2">Payer's Names</label>
-                                <input name="payerName" required placeholder="Full name registered on MoMo" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
-                            </div>
-                            <div class="space-y-2">
-                                <label class="block text-xs font-black text-slate-400 uppercase ml-2">Transaction ID (TxID)</label>
-                                <input name="txid" type="number" required placeholder="Example: 25974893559" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
-                            </div>
-                            <div class="flex gap-4 pt-4">
-                                <button type="button" onclick="navigate('courses')" class="flex-1 py-5 bg-slate-100 text-slate-500 rounded-3xl font-black hover:bg-slate-200 transition">Cancel</button>
-                                <button type="submit" class="flex-[2] py-5 bg-[#1e3a8a] text-white rounded-3xl font-black shadow-xl shadow-blue-100 hover:bg-[#0ea5e9] transition-all transform hover:-translate-y-1">Verify Payment</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderCourses() {
-            const filtered = state.isAdmin ? state.courses : state.courses.filter(c => c.status !== 'frozen');
-            return `
-                <div class="max-w-6xl mx-auto space-y-12">
-                    <h2 class="text-4xl font-black text-[#1e3a8a]">Academy Catalog</h2>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
-                        ${filtered.map(c => `
-                            <div class="bg-white border-2 border-slate-50 rounded-[40px] overflow-hidden shadow-sm hover:shadow-2xl transition-all group flex flex-col h-full">
-                                <div class="relative h-56 overflow-hidden bg-slate-100">
-                                    <img src="${c.thumbnail || 'https://images.unsplash.com/photo-1492724441997-5dc865305da7?w=800'}" class="w-full h-full object-cover group-hover:scale-110 transition duration-700">
-                                    <div class="absolute top-6 right-6 bg-white/95 backdrop-blur px-4 py-2 rounded-2xl font-black text-[#1e3a8a] shadow-lg">${c.price} RWF</div>
-                                    ${c.status === 'frozen' ? `<div class="absolute inset-0 bg-slate-900/60 flex items-center justify-center text-white font-black text-lg uppercase">Frozen</div>` : ''}
-                                </div>
-                                <div class="p-8 flex flex-col flex-1">
-                                    <h3 class="text-2xl font-black mb-3 text-[#1e3a8a] truncate">${c.title}</h3>
-                                    <p class="text-slate-500 text-sm mb-8 line-clamp-2 leading-relaxed flex-1">${c.description}</p>
-                                    <button onclick="navigate('course-player', ${JSON.stringify(c).replace(/"/g, '&quot;')})" class="w-full py-4 bg-[#1e3a8a] text-white rounded-2xl font-black hover:bg-[#0ea5e9] transition-all">
-                                        ${state.profile?.enrolled?.includes(c.id) ? 'Continue Learning' : 'Take Course'}
-                                    </button>
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderCoursePlayer() {
-            const c = state.activeCourse;
-            if (!c) return `<div>Course not found.</div>`;
-            
-            // Get the specific link currently selected to play (or default to main course link)
-            const currentLink = state.currentVideoLink || c.videoLink;
-            const isYT = currentLink?.includes('youtube.com') || currentLink?.includes('youtu.be');
-            
-            let ytId = ''; 
-            if (isYT) {
-                // ROBUST ID EXTRACTION: ignores ?si= and other extra URL params safely
-                const regExp = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
-                const match = currentLink.match(regExp);
-                if (match && match[2].length === 11) {
-                    ytId = match[2];
-                } else {
-                    // Safety Fallback
-                    ytId = currentLink.split('v=')[1]?.split('&')[0] || currentLink.split('/').pop()?.split('?')[0];
-                }
-            }
-
-            return `
-                <div class="max-w-6xl mx-auto space-y-10 animate-in fade-in duration-500">
-                    <button onclick="navigate('courses')" class="flex items-center gap-3 font-black text-slate-400 hover:text-[#1e3a8a] transition uppercase text-[10px] tracking-widest">
-                        <i data-lucide="arrow-left" class="w-4 h-4"></i> Back
-                    </button>
-                    <div class="grid lg:grid-cols-3 gap-10">
-                        <div class="lg:col-span-2 space-y-8">
-                            <div class="aspect-video bg-black rounded-[40px] overflow-hidden shadow-2xl">
-                                ${isYT ? `<iframe class="w-full h-full" src="https://www.youtube.com/embed/${ytId}?rel=0" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>` : 
-                                `<div class="h-full flex flex-col items-center justify-center text-white"><a href="${currentLink}" target="_blank" class="bg-[#0ea5e9] px-10 py-4 rounded-3xl font-black hover:bg-blue-500 transition">Play External Media</a></div>`}
-                            </div>
-                            <h1 class="text-4xl font-black text-[#1e3a8a] mb-4">${c.title}</h1>
-                            <p class="text-slate-500 text-lg leading-relaxed bg-white p-8 rounded-[30px] border border-slate-100">${c.description}</p>
-                        </div>
-                        <div class="bg-white border-2 border-slate-50 rounded-[40px] p-8 shadow-xl">
-                            <h3 class="font-black text-xl mb-6">Syllabus</h3>
-                            <div class="space-y-6">
-                                ${(c.chapters || []).map((ch, chapIdx) => `
-                                    <div class="space-y-3">
-                                        <p class="font-black text-sm text-[#1e3a8a] uppercase">${chapIdx+1}. ${ch.title}</p>
-                                        <div class="pl-4 space-y-2">
-                                            ${(ch.lectures || []).map((lec, lecIdx) => {
-                                                const isActive = currentLink === lec.link;
-                                                return `
-                                                <div onclick="playLecture('${lec.link}')" class="p-3 ${isActive ? 'bg-[#0ea5e9] text-white shadow-md' : 'bg-slate-50 hover:bg-blue-50 text-slate-600'} rounded-xl flex items-center justify-between cursor-pointer transition">
-                                                    <p class="text-xs font-bold truncate">${lec.title}</p>
-                                                    <i data-lucide="${isActive ? 'play' : 'play-circle'}" class="w-4 h-4 ${isActive ? 'text-white' : 'text-[#0ea5e9]'}"></i>
-                                                </div>
-                                            `}).join('')}
-                                        </div>
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderTimetable() {
-            const times = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"];
-            const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-            const week = state.timetableWeek;
-
-            return `
-                <div class="max-w-6xl mx-auto space-y-10">
-                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                        <h2 class="text-4xl font-black text-[#1e3a8a]">Academy Timetable</h2>
-                        <div class="flex bg-white p-2 rounded-3xl shadow-sm border border-slate-100">
-                            <button onclick="setTimetableWeek(1)" class="px-8 py-3 rounded-2xl font-black text-sm transition ${week === 1 ? 'bg-[#1e3a8a] text-white' : 'text-slate-400'}">Week 1</button>
-                            <button onclick="setTimetableWeek(2)" class="px-8 py-3 rounded-2xl font-black text-sm transition ${week === 2 ? 'bg-[#1e3a8a] text-white' : 'text-slate-400'}">Week 2</button>
-                        </div>
-                    </div>
-                    <div class="bg-white border-2 border-slate-50 rounded-[50px] shadow-2xl overflow-hidden">
-                        <div class="overflow-x-auto">
-                            <table class="w-full border-collapse min-w-[800px]">
-                                <thead>
-                                    <tr class="bg-slate-50 border-b-2 border-slate-100">
-                                        <th class="p-8 text-left text-slate-400 text-[10px] font-black uppercase tracking-[3px]">Time</th>
-                                        ${days.map(d => `<th class="p-8 text-center font-black text-[#1e3a8a] text-lg">${d}</th>`).join('')}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${times.map(t => `
-                                        <tr class="border-b border-slate-50">
-                                            <td class="p-8 bg-slate-50 font-black text-slate-500 text-sm border-r border-slate-100">${t}</td>
-                                            ${days.map(d => {
-                                                const sess = state.timetable[`w${week}_${d}_${t}`] || "";
-                                                return `
-                                                    <td onclick="updateSchedule('${d}', '${t}', ${week})" class="p-8 text-center border-l border-slate-50 group hover:bg-sky-50 cursor-pointer transition-all">
-                                                        ${sess ? `<span class="bg-[#0ea5e9] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md block">${sess}</span>` : `<span class="text-slate-200 text-[10px] font-black uppercase tracking-widest">${state.isAdmin ? '+ ADD' : '-'}</span>`}
-                                                    </td>
-                                                `;
-                                            }).join('')}
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderAdminCourses() {
-            return `
-                <div class="max-w-6xl mx-auto space-y-10">
-                    <div class="flex items-center justify-between">
-                        <h2 class="text-4xl font-black text-[#1e3a8a]">Management</h2>
-                        <button onclick="navigate('admin-add')" class="bg-[#1e3a8a] text-white px-10 py-4 rounded-3xl font-black shadow-xl">+ Add Course</button>
-                    </div>
-                    <div class="bg-white border-2 border-slate-50 rounded-[40px] shadow-2xl overflow-hidden">
-                        <table class="w-full text-left">
-                            <thead class="bg-slate-50 border-b-2 border-slate-100">
-                                <tr>
-                                    <th class="p-8 text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Course</th>
-                                    <th class="p-8 text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Price</th>
-                                    <th class="p-8 text-right text-[10px] font-black uppercase text-slate-400 tracking-[3px]">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${state.courses.map(c => `
-                                    <tr class="border-b border-slate-50 hover:bg-slate-50/50 transition">
-                                        <td class="p-8 font-black text-xl text-[#1e3a8a] truncate">${c.title}</td>
-                                        <td class="p-8 font-black text-slate-900">${c.price} RWF</td>
-                                        <td class="p-8 text-right space-x-2">
-                                            <button onclick="freezeCourse('${c.id}', '${c.status}')" class="p-3 hover:bg-amber-50 text-amber-500 rounded-2xl transition"><i data-lucide="eye-off" class="w-5 h-5"></i></button>
-                                            <button onclick="navigate('admin-edit', ${JSON.stringify(c).replace(/"/g, '&quot;')})" class="p-3 hover:bg-blue-50 text-blue-500 rounded-2xl transition"><i data-lucide="edit-3" class="w-5 h-5"></i></button>
-                                            <button onclick="askDelete('${c.id}')" class="p-3 hover:bg-red-50 text-red-600 rounded-2xl transition"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderCourseForm() {
-            const isEdit = state.view === 'admin-edit';
-            const c = state.editingCourse || {};
-            return `
-                <div class="max-w-5xl mx-auto pb-20">
-                    <button onclick="navigate('admin-courses')" class="mb-10 flex items-center gap-3 font-black text-slate-400 hover:text-[#1e3a8a] transition uppercase text-[10px] tracking-widest">
-                        <i data-lucide="arrow-left" class="w-4 h-4"></i> Cancel
-                    </button>
-                    <form onsubmit="saveCourse(event)" class="space-y-10">
-                        <div class="bg-white border-2 border-slate-50 rounded-[50px] p-8 md:p-12 shadow-2xl grid grid-cols-1 md:grid-cols-2 gap-10">
-                            <div class="space-y-6">
-                                <h3 class="text-[10px] font-black uppercase tracking-[3px] text-slate-400 mb-6">Course Identity</h3>
-                                <input name="title" value="${c.title||''}" required placeholder="Course Title" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-bold">
-                                <textarea name="description" required placeholder="Description" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 focus:border-[#0ea5e9] outline-none font-medium h-32">${c.description||''}</textarea>
-                                <div class="grid grid-cols-2 gap-6">
-                                    <input name="price" type="number" value="${c.price||''}" required placeholder="Price" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 font-bold">
-                                    <input name="duration" value="${c.duration||''}" placeholder="Duration" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 font-bold">
-                                </div>
-                            </div>
-                            <div class="space-y-6">
-                                <h3 class="text-[10px] font-black uppercase tracking-[3px] text-slate-400 mb-6">Global Media</h3>
-                                <input name="thumbnail" value="${c.thumbnail||''}" placeholder="Thumbnail URL" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 font-bold">
-                                <input name="videoLink" value="${c.videoLink||''}" required placeholder="Promo Link" class="w-full p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 font-bold">
-                            </div>
-                        </div>
-                        <div class="space-y-6">
-                            <div class="flex items-center justify-between px-6">
-                                <h3 class="text-xl font-black text-[#1e3a8a]">Syllabus Builder</h3>
-                                <button type="button" onclick="addChapter()" class="bg-[#0ea5e9] text-white px-6 py-2 rounded-2xl font-black text-xs uppercase">+ New Chapter</button>
-                            </div>
-                            ${state.formChapters.map((chap, chapIdx) => `
-                                <div class="bg-white border-2 border-slate-50 rounded-[40px] p-8 shadow-xl space-y-6 relative group/chap">
-                                    <button type="button" onclick="removeChapter(${chapIdx})" class="absolute top-8 right-8 text-red-300 hover:text-red-500 transition opacity-0 group-hover/chap:opacity-100"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
-                                    <div class="flex gap-6">
-                                        <div class="shrink-0 w-12 h-12 bg-slate-900 text-white rounded-2xl flex items-center justify-center font-black text-xl">${chapIdx+1}</div>
-                                        <input value="${chap.title}" oninput="updateChapterField(${chapIdx}, 'title', this.value)" placeholder="Chapter Title" class="flex-1 p-4 border-2 border-slate-100 rounded-2xl bg-slate-50 font-black text-[#1e3a8a] outline-none">
-                                    </div>
-                                    <div class="pl-0 sm:pl-16 space-y-4">
-                                        ${(chap.lectures || []).map((lec, lecIdx) => `
-                                            <div class="flex flex-col md:flex-row gap-4 bg-slate-50/50 p-4 rounded-3xl border border-slate-100 relative group/lec">
-                                                <button type="button" onclick="removeLecture(${chapIdx}, ${lecIdx})" class="absolute -top-2 -right-2 bg-red-500 text-white w-6 h-6 rounded-full flex items-center justify-center scale-0 group-hover/lec:scale-100 transition shadow-lg"><i data-lucide="x" class="w-3 h-3"></i></button>
-                                                <input value="${lec.title}" oninput="updateLectureField(${chapIdx}, ${lecIdx}, 'title', this.value)" placeholder="Lecture Title" class="flex-1 p-3 border-2 border-slate-100 rounded-xl bg-white text-sm font-bold">
-                                                <input value="${lec.link||''}" oninput="updateLectureField(${chapIdx}, ${lecIdx}, 'link', this.value)" placeholder="Video URL" class="flex-1 p-3 border-2 border-slate-100 rounded-xl bg-white text-sm font-bold">
-                                            </div>
-                                        `).join('')}
-                                        <button type="button" onclick="addLecture(${chapIdx})" class="w-full py-3 border-2 border-dashed border-slate-200 text-slate-400 rounded-2xl font-black text-xs hover:bg-slate-50 transition uppercase">+ Add Lecture</button>
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                        <button type="submit" class="w-full py-6 bg-[#1e3a8a] text-white rounded-[30px] font-black shadow-2xl hover:bg-slate-900 transition-all transform hover:-translate-y-1">Launch Course</button>
-                    </form>
-                </div>
-            `;
-        }
-
-        function renderDeleteModal() {
-            return `
-                <div class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in duration-300">
-                    <div class="bg-white p-12 rounded-[50px] max-w-md w-full text-center shadow-2xl">
-                        <i data-lucide="alert-triangle" class="w-10 h-10 text-red-500 mx-auto mb-6"></i>
-                        <h3 class="text-3xl font-black text-[#1e3a8a] mb-4">Confirm Delete</h3>
-                        <p class="text-slate-500 mb-10 font-medium">This removes the course from the database totally.</p>
-                        <div class="flex flex-col gap-4">
-                            <button onclick="confirmDelete()" class="w-full py-4 bg-red-500 text-white rounded-2xl font-black">Yes, Delete Totally</button>
-                            <button onclick="cancelDelete()" class="w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-black">Cancel</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderDashboard() {
-            return `
-                <div class="max-w-5xl mx-auto space-y-12">
-                    <h2 class="text-4xl font-black text-[#1e3a8a]">Your Academy Progress</h2>
-                    <div class="bg-white border-2 border-slate-50 rounded-[50px] p-8 md:p-12 shadow-2xl">
-                        <p class="text-slate-400 font-bold italic">Verify payment to unlock more courses and track your specialized path.</p>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderProfile() {
-            const profile = state.profile || {};
-            return `
-                <div class="max-w-xl mx-auto space-y-10 text-center animate-in slide-in-from-top-10 duration-700">
-                    <div class="w-32 md:w-40 h-32 md:h-40 bg-[#1e3a8a] rounded-[50px] shadow-2xl flex items-center justify-center text-white mx-auto mb-6">
-                        <i data-lucide="user" class="w-20 h-20"></i>
-                    </div>
-                    <h2 class="text-4xl font-black text-[#1e3a8a]">${profile.name || 'Student'}</h2>
-                    <div class="bg-white border-2 border-slate-50 rounded-[50px] p-8 md:p-12 shadow-2xl space-y-8 text-left">
-                        <div class="space-y-1"><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Identity</p><p class="font-bold text-slate-900 border-b pb-4">${profile.name || 'N/A'}</p></div>
-                        <div class="space-y-1"><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Email Access</p><p class="font-bold text-slate-900 border-b pb-4">${profile.email || state.user?.email || 'N/A'}</p></div>
-                        <div class="space-y-1"><p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gender Profile</p><p class="font-bold text-slate-900">${profile.gender === 'M' ? 'Male' : (profile.gender === 'F' ? 'Female' : 'N/A')}</p></div>
-                        <button onclick="logout()" class="w-full py-5 border-2 border-red-500 text-red-500 rounded-3xl font-black hover:bg-red-500 hover:text-white transition-all transform hover:scale-[1.02]">Sign Out Account</button>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderFooter() {
-            return `
-                <footer class="bg-white border-t p-12 mt-auto">
-                    <div class="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-12 text-center md:text-left">
-                        <div class="space-y-2">
-                            <p class="text-[#1e3a8a] font-black text-lg tracking-tight">NAD PRODUCTION</p>
-                            <p class="text-slate-400 font-bold text-[10px] uppercase tracking-widest">Developed by NAD PRODUCTION. All right reserved.</p>
-                            <p class="text-slate-300 font-bold text-[10px] mt-1">© NAD PRODUCTION 2026</p>
-                        </div>
-                        <div class="flex items-center gap-6">
-                            <a href="https://www.instagram.com/iamnad_/" target="_blank" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="instagram" class="w-5 h-5"></i></a>
-                            <a href="https://wa.me/250786487234" target="_blank" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="message-circle" class="w-5 h-5"></i></a>
-                            <a href="mailto:nadjibullahu@gmail.com" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="mail" class="w-5 h-5"></i></a>
-                            <a href="https://www.youtube.com/@iamnadofficial" target="_blank" class="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-[#1e3a8a] hover:bg-sky-100 transition"><i data-lucide="youtube" class="w-5 h-5"></i></a>
-                        </div>
-                    </div>
-                </footer>
-            `;
-        }
-
-    
-window.addEventListener('DOMContentLoaded', () => {
-    if (state.view === 'auth') render(); // 
-});
-    </script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .animate-in { animation: fadeIn 0.4s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        ::-webkit-scrollbar { width: 10px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; border: 3px solid white; }
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;600&display=swap');
+
+        :root {
+            --cinematic-gold: #c5a059;
+            --deep-bg: #0a0a0c;
+        }
+
+        body {
+            background-color: var(--deep-bg);
+            color: #e5e7eb;
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+            scroll-behavior: smooth;
+        }
+
+        h1, h2, h3, .playfair {
+            font-family: 'Playfair Display', serif;
+        }
+
+        .hero-gradient {
+            background: linear-gradient(to bottom, rgba(10, 10, 12, 0.4) 0%, rgba(10, 10, 12, 0.8) 80%, rgba(10, 10, 12, 1) 100%);
+        }
+
+        /* Dynamic Hero Background */
+        .parallax-bg {
+            background-image: url('https://images.unsplash.com/photo-1516035069371-29a1b244cc32?q=80&w=2000');
+            background-attachment: fixed;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-size: cover;
+        }
+
+        .btn-cinematic {
+            position: relative;
+            overflow: hidden;
+            transition: all 0.4s ease;
+            border: 1px solid var(--cinematic-gold);
+            color: var(--cinematic-gold);
+        }
+
+        .btn-cinematic:hover {
+            background: var(--cinematic-gold);
+            color: white;
+            box-shadow: 0 0 20px rgba(197, 160, 89, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .floating-nav {
+            backdrop-filter: blur(10px);
+            background: rgba(10, 10, 12, 0.8);
+        }
+
+        .fade-in {
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 1s ease, transform 1s ease;
+        }
+
+        .fade-in.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .line-accent {
+            width: 50px;
+            height: 2px;
+            background: var(--cinematic-gold);
+            margin: 1rem 0;
+        }
+
+        .quote-mark {
+            font-size: 4rem;
+            color: var(--cinematic-gold);
+            opacity: 0.3;
+            line-height: 0;
+        }
+
+        /* Video Container Styling */
+        .video-frame-container {
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 Aspect Ratio */
+            height: 0;
+            overflow: hidden;
+            border: 1px solid rgba(197, 160, 89, 0.1);
+            background: #000;
+        }
+
+        .video-frame-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Thumbnail Overlay */
+        .video-thumbnail-overlay {
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: opacity 0.6s ease;
+            cursor: pointer;
+        }
+
+        .video-thumbnail-overlay::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.4);
+            transition: background 0.4s ease;
+        }
+
+        .video-thumbnail-overlay:hover::after {
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .play-icon {
+            position: relative;
+            z-index: 20;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: 2px solid white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            color: white;
+            font-size: 1.5rem;
+            background: rgba(197, 160, 89, 0.2);
+            backdrop-filter: blur(4px);
+        }
+
+        .video-thumbnail-overlay:hover .play-icon {
+            transform: scale(1.1);
+            background: var(--cinematic-gold);
+            border-color: var(--cinematic-gold);
+            box-shadow: 0 0 30px rgba(197, 160, 89, 0.5);
+        }
+
+        .hidden-video {
+            opacity: 0;
+            pointer-events: none;
+        }
     </style>
 </head>
-<body class="text-slate-800 antialiased selection:bg-[#0ea5e9] selection:text-white">
-    <div id="root"></div>
+<body>
+
+    <!-- Navigation -->
+    <nav class="fixed w-full z-50 p-6 floating-nav flex justify-between items-center px-12">
+        <div class="text-2xl font-bold tracking-widest text-white">
+            NAD<span class="text-[#c5a059]">PROJECTS</span>
+        </div>
+        <div class="hidden md:flex space-x-8 text-sm uppercase tracking-widest font-semibold">
+            <a href="#" class="hover:text-[#c5a059] transition">Production</a>
+            <a href="#portfolio" class="hover:text-[#c5a059] transition">Portfolio</a>
+            <a href="#about" class="hover:text-[#c5a059] transition">About</a>
+        </div>
+        <a href="https://nadclasses.netlify.app/" target="_blank" class="px-6 py-2 border border-[#c5a059] text-[#c5a059] hover:bg-[#c5a059] hover:text-white transition uppercase text-xs tracking-tighter">
+            NAD CLASS
+        </a>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="relative h-screen flex items-center justify-center parallax-bg">
+        <div class="absolute inset-0 hero-gradient"></div>
+        
+        <div class="relative z-10 text-center px-4 max-w-4xl">
+            <p class="uppercase tracking-[0.5em] text-[#c5a059] mb-4 text-sm font-semibold fade-in">Nadjibullah UWABATO Presents</p>
+            <h1 class="text-5xl md:text-7xl mb-6 font-bold text-white fade-in tracking-tight">CINEMATIC FRONTIERS</h1>
+            <p class="italic text-xl md:text-2xl text-gray-300 font-light mb-8 fade-in">"Preserving Legacy, Telling Truths"</p>
+            <div class="flex flex-col md:flex-row justify-center gap-4 fade-in">
+                <a href="#portfolio" class="btn-cinematic px-10 py-4 uppercase tracking-widest text-sm font-bold">
+                    Explore Productions
+                </a>
+            </div>
+        </div>
+        
+        <div class="absolute bottom-10 left-1/2 -translate-x-1/2 animate-bounce">
+            <i class="fas fa-chevron-down text-[#c5a059] text-xl"></i>
+        </div>
+    </section>
+
+    <!-- Portfolio Section -->
+    <section id="portfolio" class="py-32 bg-[#050507]">
+        <div class="max-w-6xl mx-auto px-6">
+            <div class="text-center mb-24 fade-in">
+                <h2 class="text-4xl md:text-5xl mb-4">Featured Productions</h2>
+                <div class="line-accent mx-auto"></div>
+                <p class="text-gray-500 uppercase tracking-widest text-xs mt-4">Current works in development</p>
+            </div>
+
+            <!-- Project 1: I Loved The Impossible -->
+            <div class="grid md:grid-cols-12 gap-12 items-center mb-40 fade-in">
+                <div class="md:col-span-5 order-2 md:order-1">
+                    <span class="text-[#c5a059] text-xs font-bold uppercase tracking-[0.3em]">Story (Text)</span>
+                    <a href="https://drive.google.com/file/d/1Fyl28f2aOd4muVO8emOsZk0wHB2WqRpK/view?usp=sharing" target="_blank" class="block group w-fit">
+                        <h3 class="text-4xl mt-2 mb-6 text-white uppercase group-hover:text-[#c5a059] transition">I Loved The Impossible</h3>
+                    </a>
+                    <p class="text-gray-400 mb-8 leading-relaxed">
+                        This is a story written by Nadjibullah UWABATO, about a boy and girl who fell in love from abroad, just met in Rwanda, their love was unshakable, but the universe had another plan.
+                    </p>
+                    <a href="https://drive.google.com/file/d/1Fyl28f2aOd4muVO8emOsZk0wHB2WqRpK/view?usp=sharing" target="_blank" class="text-[#c5a059] uppercase tracking-widest text-xs font-bold border-b border-[#c5a059]/30 pb-1 hover:border-[#c5a059] transition">
+                        Read the Story
+                    </a>
+                </div>
+                <div class="md:col-span-7 order-1 md:order-2">
+                    <a href="https://drive.google.com/file/d/1Fyl28f2aOd4muVO8emOsZk0wHB2WqRpK/view?usp=sharing" target="_blank" class="block relative group overflow-hidden rounded shadow-2xl border border-[#c5a059]/10">
+                        <!-- Improvised Cinematic Thumbnail for the Story -->
+                        <img src="https://images.unsplash.com/photo-1485846234645-a62644f84728?q=80&w=1000" alt="I Loved The Impossible Thumbnail" class="w-full h-auto aspect-video object-cover transform group-hover:scale-105 transition duration-700 opacity-80 group-hover:opacity-100">
+                        <div class="absolute inset-0 bg-black/20 group-hover:bg-transparent transition duration-500"></div>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Project 2: Preserve The Nature -->
+            <div class="grid md:grid-cols-12 gap-12 items-center mb-40 fade-in">
+                <div class="md:col-span-7">
+                    <div class="relative group">
+                        <div class="video-frame-container rounded shadow-2xl">
+                            <!-- PRESERVE THE NATURE THUMBNAIL -->
+                            <div class="video-thumbnail-overlay" style="background-image: url('https://i.postimg.cc/VNNSg0Lw/Gemini-Generated-Image-jjjqoajjjqoajjjq.png')" onclick="this.style.opacity='0'; setTimeout(() => this.style.display='none', 600)">
+                                <div class="play-icon">
+                                    <i class="fas fa-play ml-1"></i>
+                                </div>
+                            </div>
+                            <iframe 
+                                src="https://drive.google.com/file/d/1wwuRfk7e06L-tM8ZyUXsrpSLOn2KivyW/preview" 
+                                frameborder="0" 
+                                allow="autoplay; fullscreen" 
+                                allowfullscreen>
+                            </iframe>
+                        </div>
+                    </div>
+                </div>
+                <div class="md:col-span-5">
+                    <span class="text-[#c5a059] text-xs font-bold uppercase tracking-[0.3em]">Cinematic Video</span>
+                    <h3 class="text-4xl mt-2 mb-6 text-white uppercase">Preserve The Nature</h3>
+                    <p class="text-gray-400 mb-8 leading-relaxed">
+                        The Short Cinematic Video by Nadjibullah UWABATO, that Highlights the Beauty of the nature, and urges the whole word to preserve the nature.
+                    </p>
+                </div>
+            </div>
+
+            <!-- Project 3: The Lost Letter -->
+            <div class="grid md:grid-cols-12 gap-12 items-center fade-in">
+                <div class="md:col-span-5 order-2 md:order-1">
+                    <span class="text-[#c5a059] text-xs font-bold uppercase tracking-[0.3em]">Voiceover Narration</span>
+                    <h3 class="text-4xl mt-2 mb-6 text-white uppercase">The Lost Letter</h3>
+                    <p class="text-gray-400 mb-8 leading-relaxed">
+                        This Project was created by Mus'ab RUGAMBA, is a voiceover narration video. It tells the atmospheric story of a character named Alex who discovers an old, emotionally heavy letter on a rainy city street. The narrative follows Alex as they experience imaginative flashbacks upon reading the message, ultimately stepping back out into the sunlit city with the purpose of potentially delivering closure.
+                    </p>
+                </div>
+                <div class="md:col-span-7 order-1 md:order-2">
+                    <div class="relative group">
+                        <div class="video-frame-container rounded shadow-2xl">
+                            <div class="video-thumbnail-overlay" style="background-image: url('https://i.postimg.cc/5y5NBLVq/Gemini-Generated-Image-22yvcm22yvcm22yv.png')" onclick="this.style.opacity='0'; setTimeout(() => this.style.display='none', 600)">
+                                <div class="play-icon">
+                                    <i class="fas fa-play ml-1"></i>
+                                </div>
+                            </div>
+                            <iframe 
+                                src="https://drive.google.com/file/d/1R6D_M54y_v5siAB2dfHs33QF1ii4gAPg/preview" 
+                                frameborder="0" 
+                                allow="autoplay; fullscreen" 
+                                allowfullscreen>
+                            </iframe>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- About / Impact Section -->
+    <section id="about" class="py-24 px-6 md:px-12 max-w-6xl mx-auto border-t border-white/5">
+        <div class="text-center mb-16 fade-in">
+            <h2 class="text-4xl mb-4">The Visionary Mission</h2>
+            <div class="line-accent mx-auto"></div>
+        </div>
+        <div class="grid md:grid-cols-2 gap-16 items-start">
+            <div class="fade-in">
+                <p class="text-gray-400 leading-relaxed mb-6 text-lg">
+                    NAD PROJECTS is more than a production house; it is a repository for human stories that intersect with political, social, and environmental landscapes. 
+                </p>
+                <p class="text-gray-400 leading-relaxed mb-8 text-lg">
+                    Whether documenting the agonies of the past or the urgencies of the natural world, our lens focuses on the truths that define our collective future.
+                </p>
+            </div>
+            <div class="bg-white/5 p-12 rounded-lg fade-in">
+                <span class="quote-mark">“</span>
+                <p class="playfair text-2xl italic text-gray-200 leading-snug">
+                    Cinema is the mirror that doesn't just show us who we are, but who we have the potential to become.
+                </p>
+                <p class="uppercase tracking-widest text-[#c5a059] mt-8 font-bold text-sm">— Nadjibullah UWABATO</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Call to Action -->
+    <section class="py-32 text-center bg-black">
+        <div class="fade-in">
+            <h2 class="text-3xl md:text-4xl mb-12 uppercase tracking-tighter">Enter the Archive</h2>
+            <div class="flex flex-col md:flex-row justify-center gap-12">
+                <div class="inline-block group">
+                    <a href="https://audiomack.com/iamnad/album/wheels-in-the-hills" target="_blank" class="block">
+                        <div class="flex flex-col items-center">
+                            <div class="w-20 h-20 rounded-full border border-[#c5a059] flex items-center justify-center mb-6 group-hover:bg-[#c5a059] transition duration-500">
+                                <i class="fas fa-scroll text-[#c5a059] group-hover:text-white text-xl"></i>
+                            </div>
+                            <span class="uppercase tracking-[0.4em] text-xs text-[#c5a059]">The Memoirs</span>
+                        </div>
+                    </a>
+                </div>
+                <div class="inline-block group">
+                    <a href="#" class="block">
+                        <div class="flex flex-col items-center">
+                            <div class="w-20 h-20 rounded-full border border-[#c5a059] flex items-center justify-center mb-6 group-hover:bg-[#c5a059] transition duration-500">
+                                <i class="fas fa-camera-retro text-[#c5a059] group-hover:text-white text-xl"></i>
+                            </div>
+                            <span class="uppercase tracking-[0.4em] text-xs text-[#c5a059]">The Gallery</span>
+                        </div>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="py-12 border-t border-gray-900 px-6 bg-black">
+        <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center text-gray-600 text-[10px] tracking-[0.3em] uppercase">
+            <div class="mb-4 md:mb-0 text-center md:text-left">
+                © 2026 NAD PROJECTS | ALL RIGHTS RESERVED
+            </div>
+            <div class="flex space-x-6">
+                <a href="#" class="hover:text-white transition"><i class="fab fa-instagram"></i></a>
+                <a href="#" class="hover:text-white transition"><i class="fab fa-vimeo-v"></i></a>
+                <a href="#" class="hover:text-white transition"><i class="fab fa-twitter"></i></a>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        const observerOptions = {
+            threshold: 0.1
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+    </script>
 </body>
 </html>
