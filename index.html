@@ -72,14 +72,15 @@
                     if (profileSnap.exists()) {
                         state.profile = profileSnap.data();
                         if (!state.profile.enrolled) state.profile.enrolled = [];
+                        if (!state.profile.progress) state.profile.progress = {}; // Initialize progress
                     } else if (state.isAdmin) {
-                        state.profile = { name: "Nadjibullah UWABATO", gender: "M", email: ADMIN_EMAIL, enrolled: [] };
+                        state.profile = { name: "Nadjibullah UWABATO", gender: "M", email: ADMIN_EMAIL, enrolled: [], progress: {} };
                     } else {
-                        state.profile = { name: "Learner", enrolled: [] };
+                        state.profile = { name: "Learner", enrolled: [], progress: {} };
                     }
                 } catch (e) {
                     console.error("Profile Fetch Error:", e);
-                    state.profile = { name: "Learner", enrolled: [] };
+                    state.profile = { name: "Learner", enrolled: [], progress: {} };
                 }
                 
                 state.view = 'home';
@@ -124,7 +125,7 @@
                     const gender = e.target.gender.value;
                     const cred = await createUserWithEmailAndPassword(auth, email, password);
                     await setDoc(doc(db, 'artifacts', appId, 'users', cred.user.uid, 'profile', 'details'), {
-                        name, email, gender, role: 'student', enrolled: []
+                        name, email, gender, role: 'student', enrolled: [], progress: {}
                     });
                 }
             } catch (err) { 
@@ -158,7 +159,6 @@
             render();
         };
 
-        // NEW: Function to play specific lecture videos
         window.playLecture = (link) => {
             if (!link) {
                 showMessage("No video link provided for this lecture.", "error");
@@ -167,6 +167,35 @@
             state.currentVideoLink = link;
             render();
             window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        // NEW: Function to toggle lecture completion status for Progress Tracking
+        window.toggleLectureCompletion = async (courseId, link) => {
+            if (!state.user || !state.profile) return;
+            
+            if (!state.profile.progress) state.profile.progress = {};
+            if (!state.profile.progress[courseId]) state.profile.progress[courseId] = [];
+
+            const completedLectures = state.profile.progress[courseId];
+            if (completedLectures.includes(link)) {
+                // Remove from completed
+                state.profile.progress[courseId] = completedLectures.filter(l => l !== link);
+            } else {
+                // Add to completed
+                state.profile.progress[courseId].push(link);
+            }
+
+            // Optimistically render
+            render();
+
+            // Save to database
+            try {
+                const profileRef = doc(db, 'artifacts', appId, 'users', state.user.uid, 'profile', 'details');
+                await setDoc(profileRef, { progress: state.profile.progress }, { merge: true });
+            } catch (err) {
+                console.error("Progress save error: ", err);
+                showMessage("Failed to save progress", "error");
+            }
         };
 
         window.handlePayment = async (e) => {
@@ -204,7 +233,7 @@
                     timestamp: new Date().toISOString()
                 });
 
-                if (!state.profile) { state.profile = { enrolled: [] }; }
+                if (!state.profile) { state.profile = { enrolled: [], progress: {} }; }
                 
                 const enrolled = state.profile.enrolled || [];
                 if (!enrolled.includes(state.pendingCourse.id)) { enrolled.push(state.pendingCourse.id); }
@@ -584,26 +613,100 @@
                             <h1 class="text-4xl font-black text-[#1e3a8a] mb-4">${c.title}</h1>
                             <p class="text-slate-500 text-lg leading-relaxed bg-white p-8 rounded-[30px] border border-slate-100">${c.description}</p>
                         </div>
-                        <div class="bg-white border-2 border-slate-50 rounded-[40px] p-8 shadow-xl">
+                        <div class="bg-white border-2 border-slate-50 rounded-[40px] p-8 shadow-xl max-h-[800px] flex flex-col">
                             <h3 class="font-black text-xl mb-6">Syllabus</h3>
-                            <div class="space-y-6">
+                            <div class="space-y-6 overflow-y-auto flex-1 pr-2">
                                 ${(c.chapters || []).map((ch, chapIdx) => `
                                     <div class="space-y-3">
                                         <p class="font-black text-sm text-[#1e3a8a] uppercase">${chapIdx+1}. ${ch.title}</p>
-                                        <div class="pl-4 space-y-2">
+                                        <div class="pl-2 space-y-2">
                                             ${(ch.lectures || []).map((lec, lecIdx) => {
                                                 const isActive = currentLink === lec.link;
+                                                const isCompleted = state.profile?.progress?.[c.id]?.includes(lec.link);
                                                 return `
-                                                <div onclick="playLecture('${lec.link}')" class="p-3 ${isActive ? 'bg-[#0ea5e9] text-white shadow-md' : 'bg-slate-50 hover:bg-blue-50 text-slate-600'} rounded-xl flex items-center justify-between cursor-pointer transition">
-                                                    <p class="text-xs font-bold truncate">${lec.title}</p>
-                                                    <i data-lucide="${isActive ? 'play' : 'play-circle'}" class="w-4 h-4 ${isActive ? 'text-white' : 'text-[#0ea5e9]'}"></i>
+                                                <div class="flex items-center gap-2 group/leccard">
+                                                    <button onclick="event.stopPropagation(); toggleLectureCompletion('${c.id}', '${lec.link}')" class="shrink-0 text-${isCompleted ? '[#0ea5e9]' : 'slate-200'} hover:text-[#0ea5e9] hover:scale-110 transition p-1" title="Mark as ${isCompleted ? 'incomplete' : 'complete'}">
+                                                        <i data-lucide="${isCompleted ? 'check-circle-2' : 'circle'}" class="w-6 h-6"></i>
+                                                    </button>
+                                                    <div onclick="playLecture('${lec.link}')" class="flex-1 p-3 ${isActive ? 'bg-[#0ea5e9] text-white shadow-md' : 'bg-slate-50 hover:bg-blue-50 text-slate-600'} rounded-xl flex items-center justify-between cursor-pointer transition">
+                                                        <p class="text-xs font-bold truncate">${lec.title}</p>
+                                                        <i data-lucide="${isActive ? 'play' : 'play-circle'}" class="w-4 h-4 ${isActive ? 'text-white' : 'text-[#0ea5e9]'} shrink-0"></i>
+                                                    </div>
                                                 </div>
-                                            `}).join('')}
+                                                `}).join('')}
                                         </div>
                                     </div>
                                 `).join('')}
                             </div>
                         </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderDashboard() {
+            const enrolledIds = state.profile?.enrolled || [];
+            // Retrieve only the courses the user has paid for and enrolled in.
+            const myCourses = state.courses.filter(c => enrolledIds.includes(c.id));
+
+            if (myCourses.length === 0) {
+                return `
+                    <div class="max-w-5xl mx-auto space-y-12 animate-in fade-in duration-500">
+                        <h2 class="text-4xl font-black text-[#1e3a8a]">Your Dashboard</h2>
+                        <div class="bg-white border-2 border-slate-50 rounded-[50px] p-8 md:p-12 shadow-2xl flex flex-col items-center justify-center text-center space-y-6">
+                            <div class="w-24 h-24 bg-sky-50 rounded-[30px] flex items-center justify-center text-[#0ea5e9] shadow-inner">
+                                <i data-lucide="book-x" class="w-10 h-10"></i>
+                            </div>
+                            <h3 class="text-2xl font-black text-[#1e3a8a]">No Active Courses</h3>
+                            <p class="text-slate-400 font-bold max-w-md">You haven't enrolled in any courses yet. Browse the catalog and verify payment to unlock your specialized path.</p>
+                            <button onclick="navigate('courses')" class="bg-[#1e3a8a] text-white px-10 py-4 rounded-3xl font-black shadow-xl shadow-blue-100 hover:bg-[#0ea5e9] transition-all transform hover:-translate-y-1">Browse Catalog</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500">
+                    <h2 class="text-4xl font-black text-[#1e3a8a]">My Learning Progress</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
+                        ${myCourses.map(c => {
+                            // Calculate total lectures
+                            let totalLectures = 0;
+                            (c.chapters || []).forEach(chap => {
+                                totalLectures += (chap.lectures || []).length;
+                            });
+
+                            // Calculate completed lectures
+                            const progressArr = state.profile?.progress?.[c.id] || [];
+                            const completedCount = progressArr.length;
+                            const percent = totalLectures === 0 ? 0 : Math.round((completedCount / totalLectures) * 100);
+
+                            return `
+                                <div class="bg-white border-2 border-slate-50 rounded-[40px] overflow-hidden shadow-sm hover:shadow-2xl transition-all flex flex-col h-full group">
+                                    <div class="relative h-48 overflow-hidden bg-slate-100">
+                                        <img src="${c.thumbnail || 'https://images.unsplash.com/photo-1492724441997-5dc865305da7?w=800'}" class="w-full h-full object-cover group-hover:scale-110 transition duration-700">
+                                        <div class="absolute inset-0 bg-gradient-to-t from-slate-900/90 via-slate-900/20 to-transparent flex items-end p-6">
+                                            <h3 class="text-xl font-black text-white truncate w-full">${c.title}</h3>
+                                        </div>
+                                    </div>
+                                    <div class="p-8 flex flex-col flex-1 space-y-6">
+                                        <div>
+                                            <div class="flex justify-between text-xs font-black mb-3 uppercase tracking-widest">
+                                                <span class="text-slate-400">Progress</span>
+                                                <span class="text-[#0ea5e9]">${percent}%</span>
+                                            </div>
+                                            <div class="w-full bg-slate-100 rounded-full h-3 overflow-hidden shadow-inner">
+                                                <div class="bg-[#0ea5e9] h-3 rounded-full transition-all duration-1000 ease-out" style="width: ${percent}%"></div>
+                                            </div>
+                                            <p class="text-[11px] font-bold text-slate-400 mt-3 text-right">${completedCount} of ${totalLectures} lectures completed</p>
+                                        </div>
+                                        <button onclick="navigate('course-player', ${JSON.stringify(c).replace(/"/g, '&quot;')})" class="w-full py-4 bg-slate-50 text-[#1e3a8a] rounded-2xl font-black hover:bg-[#1e3a8a] hover:text-white transition-all mt-auto border-2 border-transparent hover:border-[#1e3a8a]">
+                                            Resume Learning
+                                        </button>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
                     </div>
                 </div>
             `;
@@ -756,17 +859,6 @@
                             <button onclick="confirmDelete()" class="w-full py-4 bg-red-500 text-white rounded-2xl font-black">Yes, Delete Totally</button>
                             <button onclick="cancelDelete()" class="w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-black">Cancel</button>
                         </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderDashboard() {
-            return `
-                <div class="max-w-5xl mx-auto space-y-12">
-                    <h2 class="text-4xl font-black text-[#1e3a8a]">Your Academy Progress</h2>
-                    <div class="bg-white border-2 border-slate-50 rounded-[50px] p-8 md:p-12 shadow-2xl">
-                        <p class="text-slate-400 font-bold italic">Verify payment to unlock more courses and track your specialized path.</p>
                     </div>
                 </div>
             `;
